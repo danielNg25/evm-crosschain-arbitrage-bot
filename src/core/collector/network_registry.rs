@@ -1,0 +1,314 @@
+use crate::{
+    core::PoolUpdaterLatestBlock,
+    models::{
+        path::{PathRegistry, SingleChainPathsWithAnchorToken},
+        pool::PoolRegistry,
+        profit_token::{price_updater::PriceSourceType, ProfitToken, ProfitTokenRegistry},
+        token::TokenRegistry,
+    },
+    PoolInterface,
+};
+use alloy::{primitives::Address, providers::DynProvider};
+use anyhow::Result;
+use dashmap::DashMap;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::RwLock;
+
+use alloy::primitives::U256;
+
+pub struct MultichainNetworkRegistry {
+    pub network_registries: DashMap<u64, Arc<NetworkRegistry>>,
+}
+
+pub struct NetworkRegistry {
+    pub network_id: u64,
+    pub network_name: String,
+    pub provider: Arc<DynProvider>,
+    pub pool_registry: Arc<RwLock<PoolRegistry>>,
+    pub token_registry: Arc<RwLock<TokenRegistry>>,
+    pub path_registry: Arc<RwLock<PathRegistry>>,
+    pub pool_updater: Arc<RwLock<PoolUpdaterLatestBlock>>,
+    pub profit_token_registry: Arc<RwLock<ProfitTokenRegistry>>,
+}
+
+impl NetworkRegistry {
+    pub fn new(
+        network_id: u64,
+        network_name: String,
+        provider: Arc<DynProvider>,
+        pool_registry: Arc<RwLock<PoolRegistry>>,
+        token_registry: Arc<RwLock<TokenRegistry>>,
+        path_registry: Arc<RwLock<PathRegistry>>,
+        pool_updater: Arc<RwLock<PoolUpdaterLatestBlock>>,
+        profit_token_registry: Arc<RwLock<ProfitTokenRegistry>>,
+    ) -> Self {
+        Self {
+            network_id,
+            network_name,
+            provider,
+            pool_registry,
+            token_registry,
+            path_registry,
+            pool_updater,
+            profit_token_registry,
+        }
+    }
+}
+
+impl MultichainNetworkRegistry {
+    pub fn new() -> Self {
+        Self {
+            network_registries: DashMap::new(),
+        }
+    }
+
+    pub async fn get_network_info(&self, chain_id: u64) -> Option<(u64, String)> {
+        self.network_registries
+            .get(&chain_id)
+            .map(|r| (r.network_id, r.network_name.clone()))
+    }
+
+    pub async fn get_network_registry(&self, chain_id: u64) -> Option<Arc<NetworkRegistry>> {
+        self.network_registries
+            .get(&chain_id)
+            .map(|r| Arc::clone(&r.value()))
+    }
+
+    // PATH
+    pub async fn get_path_registry(&self, chain_id: u64) -> Option<Arc<RwLock<PathRegistry>>> {
+        self.network_registries
+            .get(&chain_id)
+            .map(|r| Arc::clone(&r.value().path_registry))
+    }
+
+    pub async fn remove_network_registry(&mut self, chain_id: u64) -> Result<()> {
+        self.network_registries.remove(&chain_id);
+        Ok(())
+    }
+
+    pub async fn set_paths(&mut self, paths: Vec<SingleChainPathsWithAnchorToken>) -> Result<()> {
+        for path in &paths {
+            // verify path is valid
+            let anchor_token = path.anchor_token;
+            let mut pool_to_path = HashMap::new();
+            for single_path in &path.paths {
+                if single_path.first().unwrap().token_in != anchor_token {
+                    return Err(anyhow::anyhow!(
+                        "First token in path is not the anchor token"
+                    ));
+                }
+
+                let len = single_path.len();
+                if len >= 2 {
+                    for i in 0..len - 2 {
+                        if single_path[i].token_out != single_path[i + 1].token_in {
+                            return Err(anyhow::anyhow!("Path is not valid"));
+                        }
+                    }
+                }
+
+                let pool = single_path[0].pool;
+                if !pool_to_path.contains_key(&pool) {
+                    pool_to_path.insert(pool, Vec::new());
+                }
+                pool_to_path
+                    .get_mut(&pool)
+                    .unwrap()
+                    .push(single_path.clone());
+            }
+            let path_registry = self.get_path_registry(path.chain_id).await.unwrap();
+            // Filter out paths for the current chain_id - only include paths for other chains
+            let other_paths: Vec<SingleChainPathsWithAnchorToken> = paths
+                .iter()
+                .filter(|p| p.chain_id != path.chain_id)
+                .cloned()
+                .collect();
+
+            for (pool, paths) in pool_to_path {
+                path_registry
+                    .write()
+                    .await
+                    .set_paths(
+                        pool,
+                        SingleChainPathsWithAnchorToken {
+                            paths: paths,
+                            chain_id: path.chain_id,
+                            anchor_token: path.anchor_token,
+                        },
+                        other_paths.clone(),
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_paths_for_pool(
+        &self,
+        chain_id: u64,
+        pool: Address,
+    ) -> Option<(
+        SingleChainPathsWithAnchorToken,
+        Vec<SingleChainPathsWithAnchorToken>,
+    )> {
+        let path_registry = self.get_path_registry(chain_id).await.unwrap();
+        let guard = path_registry.read().await;
+        guard.get_paths_for_pool(pool).await
+    }
+
+    // POOL
+    pub async fn get_pool_registry(&self, network_id: u64) -> Option<Arc<RwLock<PoolRegistry>>> {
+        let network_registry = self.get_network_registry(network_id).await;
+        if let Some(network_registry) = network_registry {
+            Some(network_registry.pool_registry.clone())
+        } else {
+            None
+        }
+    }
+
+    pub async fn get_pool(
+        &self,
+        network_id: u64,
+        address: Address,
+    ) -> Option<Arc<RwLock<Box<dyn PoolInterface + Send + Sync>>>> {
+        let pool_registry = self.get_pool_registry(network_id).await;
+        if let Some(pool_registry) = pool_registry {
+            pool_registry.read().await.get_pool(&address).await
+        } else {
+            None
+        }
+    }
+
+    // TOKEN
+    pub async fn get_token_registry(&self, network_id: u64) -> Option<Arc<RwLock<TokenRegistry>>> {
+        let network_registry = self.get_network_registry(network_id).await;
+        if let Some(network_registry) = network_registry {
+            Some(network_registry.token_registry.clone())
+        } else {
+            None
+        }
+    }
+
+    pub async fn get_token_symbol(&self, network_id: u64, address: Address) -> Option<String> {
+        let token_registry = self.get_token_registry(network_id).await;
+        if let Some(token_registry) = token_registry {
+            let guard = token_registry.read().await;
+            let token = guard.get_token(address);
+            token.map(|t| t.symbol.clone())
+        } else {
+            None
+        }
+    }
+
+    // PROFIT TOKEN
+    pub async fn get_profit_token_registry(
+        &self,
+        network_id: u64,
+    ) -> Option<Arc<RwLock<ProfitTokenRegistry>>> {
+        let network_registry = self.get_network_registry(network_id).await;
+        if let Some(network_registry) = network_registry {
+            Some(network_registry.profit_token_registry.clone())
+        } else {
+            None
+        }
+    }
+
+    pub async fn add_token(&self, chain_id: u64, token: Address) {
+        let config = ProfitToken {
+            address: token,
+            min_profit: U256::ZERO,
+            price_source: Some(PriceSourceType::GeckoTerminal),
+            price: None,
+            default_price: 1.0,
+        };
+        let profit_token_registry = self.get_profit_token_registry(chain_id).await.unwrap();
+        profit_token_registry
+            .write()
+            .await
+            .add_token(token, config)
+            .await;
+    }
+
+    pub async fn get_amount_for_value(
+        &self,
+        chain_id: u64,
+        token: Address,
+        value: f64,
+    ) -> Option<U256> {
+        let registry = self.get_profit_token_registry(chain_id).await?;
+        let guard = registry.read().await;
+
+        guard.get_amount_for_value(&token, value).await
+    }
+
+    pub async fn get_value(&self, chain_id: u64, token: Address, amount: U256) -> Option<f64> {
+        let registry = self.get_profit_token_registry(chain_id).await?;
+        let guard = registry.read().await;
+
+        guard.get_value(&token, amount).await
+    }
+
+    pub async fn to_raw_amount(&self, chain_id: u64, token: Address, amount: &str) -> Result<U256> {
+        let registry = self
+            .get_profit_token_registry(chain_id)
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!("Network registry not found for chain_id: {}", chain_id)
+            })?;
+        let guard = registry.read().await;
+
+        Ok(guard.to_raw_amount(&token, amount).await?)
+    }
+
+    pub async fn to_human_amount(
+        &self,
+        chain_id: u64,
+        token: Address,
+        amount: U256,
+    ) -> Result<String> {
+        let registry = self
+            .get_profit_token_registry(chain_id)
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!("Network registry not found for chain_id: {}", chain_id)
+            })?;
+        let guard = registry.read().await;
+
+        guard.to_human_amount(&token, amount).await
+    }
+
+    pub async fn to_raw_amount_f64(
+        &self,
+        chain_id: u64,
+        token: Address,
+        amount: f64,
+    ) -> Result<U256> {
+        let registry = self
+            .get_profit_token_registry(chain_id)
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!("Network registry not found for chain_id: {}", chain_id)
+            })?;
+        let guard = registry.read().await;
+
+        Ok(guard.to_raw_amount_f64(&token, amount).await?)
+    }
+
+    pub async fn to_human_amount_f64(
+        &self,
+        chain_id: u64,
+        token: Address,
+        amount: U256,
+    ) -> Result<f64> {
+        let registry = self
+            .get_profit_token_registry(chain_id)
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!("Network registry not found for chain_id: {}", chain_id)
+            })?;
+        let guard = registry.read().await;
+
+        Ok(guard.to_human_amount_f64(&token, amount).await?)
+    }
+}

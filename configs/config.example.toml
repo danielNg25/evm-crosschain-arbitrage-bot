@@ -1,0 +1,15 @@
+[mongodb]
+database = "crosschain"
+uri = ""
+poll_interval_secs = 60
+
+[processor]
+max_iterations = 200
+max_amount_usd = 20000.0
+
+[executor]
+default_recheck_interval = 60
+
+[telegram]
+token = ""
+chat_id = ""

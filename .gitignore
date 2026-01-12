@@ -1,0 +1,7 @@
+/target
+/configs/*
+!/configs/config.example.toml
+/data/*
+!/data/mock.md
+opportunities*.log
+.env

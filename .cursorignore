@@ -1,0 +1,7 @@
+/configs/strategies/*
+!/configs/strategies/example.toml
+opportunities*.log
+/data/*
+!/data/mock.md
+.env
+.DS_Store
