@@ -49,6 +49,10 @@ impl GeckoTerminalPriceFetcher {
 
 #[async_trait::async_trait]
 impl PriceFetcher for GeckoTerminalPriceFetcher {
+    async fn update_chain_name(&mut self, chain_name: String) {
+        self.network = chain_name;
+    }
+
     async fn fetch_prices(&self) -> Result<HashMap<Address, TokenPrice>> {
         let addresses = self.token_addresses.read().await;
         if addresses.is_empty() {

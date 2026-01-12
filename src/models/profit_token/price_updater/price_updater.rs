@@ -30,6 +30,15 @@ impl PriceUpdater {
         }
     }
 
+    pub async fn update_chain_name(&mut self, chain_name: String) {
+        for fetcher in &mut self.price_fetchers {
+            if fetcher.get_price_source_type() == PriceSourceType::GeckoTerminal {
+                fetcher.update_chain_name(chain_name).await;
+                break;
+            }
+        }
+    }
+
     pub fn add_price_fetcher(&mut self, price_fetcher: Box<dyn PriceFetcher>) {
         self.price_fetchers.push(price_fetcher);
     }

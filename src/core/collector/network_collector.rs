@@ -1,10 +1,12 @@
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::core::{MultichainNetworkRegistry, NetworkRegistry, PoolChange};
 use crate::models::profit_token::price_updater::PriceUpdater;
 use crate::models::profit_token::ProfitTokenRegistry;
 use crate::utils::metrics::Metrics;
-use alloy::providers::{Provider, ProviderBuilder, MULTICALL3_ADDRESS};
+use alloy::primitives::Address;
+use alloy::providers::{DynProvider, Provider, ProviderBuilder, MULTICALL3_ADDRESS};
 use alloy::rpc::client::RpcClient;
 use alloy::transports::http::Http;
 use alloy::transports::layers::FallbackLayer;
@@ -47,7 +49,7 @@ impl NetworkCollector {
     pub fn add_network(&self, network_id: u64, network_registry: NetworkRegistry) -> Result<()> {
         self.network_registries
             .network_registries
-            .insert(network_id, Arc::new(network_registry));
+            .insert(network_id, Arc::new(RwLock::new(network_registry)));
         Ok(())
     }
 
@@ -74,6 +76,7 @@ impl NetworkCollector {
             );
 
             loop {
+                info!("Polling ...");
                 // Poll networks (incremental)
                 match Self::fetch_networks_since(&mongodb_service, last_network_sync).await {
                     Ok(networks) => {
@@ -198,35 +201,17 @@ impl NetworkCollector {
     ) -> Result<()> {
         let network_len = networks.len();
         for network in networks {
+            let network_id = network.chain_id;
+            let network_name = network.name.clone();
             if !network_registries
                 .network_registries
                 .contains_key(&network.chain_id)
             {
-                let network_id = network.chain_id;
-                let network_name = network.name.clone();
-                let rpc_len = network.rpcs.len();
-                let fallback_layer = FallbackLayer::default()
-                    .with_active_transport_count(NonZeroUsize::new(rpc_len).unwrap());
-
-                // Define your list of transports to use
-                let transports = network
-                    .rpcs
-                    .iter()
-                    .map(|url| Http::new(url.parse().unwrap()))
-                    .collect::<Vec<_>>();
-
-                // Apply the FallbackLayer to the transports
-                let transport = ServiceBuilder::new()
-                    .layer(fallback_layer)
-                    .service(transports);
-                let client = RpcClient::builder().transport(transport, false);
-                let provider = ProviderBuilder::new().connect_client(client.clone());
+                let provider = create_provider(network.rpcs.clone());
                 let latest_block = provider.get_block_number().await.unwrap();
 
-                let pool_registry = Arc::new(RwLock::new(PoolRegistry::new(
-                    provider.clone().erased(),
-                    network_id,
-                )));
+                let pool_registry =
+                    Arc::new(RwLock::new(PoolRegistry::new(provider.clone(), network_id)));
                 let token_registry = Arc::new(RwLock::new(TokenRegistry::new(network_id)));
                 let path_registry = Arc::new(RwLock::new(PathRegistry::new(network_id)));
                 let price_updater =
@@ -240,7 +225,7 @@ impl NetworkCollector {
                 )));
                 let pool_updater = Arc::new(RwLock::new(
                     PoolUpdaterLatestBlock::new(
-                        Arc::new(provider.clone().erased()),
+                        Arc::new(provider.clone()),
                         pool_registry.clone(),
                         token_registry.clone(),
                         network
@@ -270,6 +255,7 @@ impl NetworkCollector {
                 let network_registry = NetworkRegistry::new(
                     network_id,
                     network_name,
+                    network.rpcs.clone(),
                     Arc::new(provider.clone().erased()),
                     pool_registry,
                     token_registry,
@@ -279,8 +265,9 @@ impl NetworkCollector {
                 );
                 network_registries
                     .network_registries
-                    .insert(network_id, Arc::new(network_registry));
+                    .insert(network_id, Arc::new(RwLock::new(network_registry)));
                 tokio::spawn(async move {
+                    info!("Starting pool updater for network {}", network_id);
                     if let Err(e) = pool_updater
                         .clone()
                         .write()
@@ -292,7 +279,13 @@ impl NetworkCollector {
                     }
                 });
             } else {
-                // TODO: Implement network update logic
+                // Checking changes in the network
+                let network_registry = network_registries
+                    .get_network_registry(network_id)
+                    .await
+                    .unwrap();
+
+                network_registry.write().await.update_network(network).await;
             }
         }
         info!("Handled {} networks update", network_len);
@@ -330,4 +323,24 @@ impl NetworkCollector {
             paths.len()
         );
     }
+}
+
+pub fn create_provider(rpcs: Vec<String>) -> DynProvider {
+    let rpc_len = rpcs.len();
+    let fallback_layer =
+        FallbackLayer::default().with_active_transport_count(NonZeroUsize::new(rpc_len).unwrap());
+
+    // Define your list of transports to use
+    let transports = rpcs
+        .iter()
+        .map(|url| Http::new(url.parse().unwrap()))
+        .collect::<Vec<_>>();
+
+    // Apply the FallbackLayer to the transports
+    let transport = ServiceBuilder::new()
+        .layer(fallback_layer)
+        .service(transports);
+    let client = RpcClient::builder().transport(transport, false);
+    let provider = ProviderBuilder::new().connect_client(client.clone());
+    provider.clone().erased()
 }

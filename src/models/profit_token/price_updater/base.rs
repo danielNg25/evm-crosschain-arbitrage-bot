@@ -17,6 +17,8 @@ pub struct TokenPrice {
 
 #[async_trait::async_trait]
 pub trait PriceFetcher: Send + Sync {
+    async fn update_chain_name(&mut self, chain_name: String);
+
     async fn fetch_prices(&self) -> Result<HashMap<Address, TokenPrice>>;
 
     fn get_price_source_type(&self) -> PriceSourceType;

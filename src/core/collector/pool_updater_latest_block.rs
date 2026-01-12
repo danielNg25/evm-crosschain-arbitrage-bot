@@ -24,12 +24,12 @@ pub struct PoolUpdaterLatestBlock {
     token_registry: Arc<RwLock<TokenRegistry>>,
     pending_new_pools: Arc<RwLock<Vec<Address>>>,
     metrics: Arc<RwLock<Metrics>>,
-    max_blocks_per_batch: u64,
+    pub max_blocks_per_batch: u64,
     swap_event_tx: mpsc::Sender<PoolChange>,
     topics: Arc<Vec<Topic>>,
     profitable_topics: Arc<HashSet<Topic>>,
-    multicall_address: Address,
-    wait_time_fetch: u64,
+    pub multicall_address: Address,
+    pub wait_time_fetch: u64,
     chain_id: u64,
 }
 
@@ -233,6 +233,22 @@ impl PoolUpdaterLatestBlock {
             // Add a small delay between iterations to prevent tight loops
             tokio::time::sleep(Duration::from_millis(self.wait_time_fetch)).await;
         }
+    }
+
+    pub async fn set_provider(&mut self, provider: DynProvider) {
+        self.provider = Arc::new(provider);
+    }
+
+    pub async fn set_multicall_address(&mut self, multicall_address: Address) {
+        self.multicall_address = multicall_address;
+    }
+
+    pub async fn set_wait_time_fetch(&mut self, wait_time_fetch: u64) {
+        self.wait_time_fetch = wait_time_fetch;
+    }
+
+    pub async fn set_max_blocks_per_batch(&mut self, max_blocks_per_batch: u64) {
+        self.max_blocks_per_batch = max_blocks_per_batch;
     }
 
     pub async fn add_pending_new_pools(&mut self, new_pools: Vec<Address>) -> Result<()> {

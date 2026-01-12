@@ -1,6 +1,6 @@
-use alloy::primitives::map::HashMap;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Network model for MongoDB
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -10,12 +10,12 @@ pub struct Network {
     pub chain_id: u64,
     pub name: String,
     pub rpcs: Vec<String>,
-    pub websocket_urls: Vec<String>,
-    pub block_explorer: String,
+    pub websocket_urls: Option<Vec<String>>,
+    pub block_explorer: Option<String>,
     pub wrap_native: String,
     pub min_profit_usd: f64,
-    pub v2_factory_to_fee: HashMap<String, u64>,
-    pub aero_factory_addresses: Vec<String>,
+    pub v2_factory_to_fee: Option<HashMap<String, u64>>,
+    pub aero_factory_addresses: Option<Vec<String>>,
     pub multicall_address: Option<String>,
     pub max_blocks_per_batch: u64,
     pub wait_time_fetch: u64,
@@ -28,12 +28,12 @@ impl Network {
         chain_id: u64,
         name: String,
         rpcs: Vec<String>,
-        websocket_urls: Vec<String>,
+        websocket_urls: Option<Vec<String>>,
         wrap_native: String,
         min_profit_usd: f64,
-        block_explorer: String,
-        v2_factory_to_fee: HashMap<String, u64>,
-        aero_factory_addresses: Vec<String>,
+        block_explorer: Option<String>,
+        v2_factory_to_fee: Option<HashMap<String, u64>>,
+        aero_factory_addresses: Option<Vec<String>>,
         multicall_address: Option<String>,
         max_blocks_per_batch: u64,
         wait_time_fetch: u64,

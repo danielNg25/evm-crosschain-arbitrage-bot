@@ -261,6 +261,11 @@ impl ProfitTokenRegistry {
         self.wrap_native.read().await.clone()
     }
 
+    /// Set the minimum profit usd
+    pub async fn set_min_profit_usd(&mut self, min_profit_usd: f64) {
+        self.min_profit_usd = min_profit_usd;
+    }
+
     /// Remove a profit token
     pub async fn remove_token(&self, token: &Address) {
         self.tokens.write().await.remove(token);
@@ -330,6 +335,14 @@ impl ProfitTokenRegistry {
                 );
             }
         }
+    }
+
+    pub async fn update_chain_name(&self, chain_name: String) {
+        self.price_updater
+            .write()
+            .await
+            .update_chain_name(chain_name)
+            .await;
     }
 
     /// Get all profit token configurations

@@ -21,8 +21,8 @@ pub struct PoolRegistry {
     last_processed_block: Arc<RwLock<u64>>,
     topics: Arc<RwLock<Vec<Topic>>>,
     profitable_topics: Arc<RwLock<HashSet<Topic>>>,
-    factory_to_fee: Arc<RwLock<HashMap<String, u64>>>,
-    aero_factory_addresses: Arc<RwLock<Vec<Address>>>,
+    pub factory_to_fee: Arc<RwLock<HashMap<String, u64>>>,
+    pub aero_factory_addresses: Arc<RwLock<Vec<Address>>>,
     network_id: u64,
 }
 
@@ -39,6 +39,10 @@ impl PoolRegistry {
             aero_factory_addresses: Arc::new(RwLock::new(Vec::new())),
             network_id,
         }
+    }
+
+    pub async fn set_provider(&mut self, provider: DynProvider) {
+        self.provider = Arc::new(provider);
     }
 
     pub async fn set_factory_to_fee(&mut self, factory_to_fee: HashMap<String, u64>) {
