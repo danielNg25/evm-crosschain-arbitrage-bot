@@ -7,7 +7,7 @@ use super::models::{Network, Path, Pool, Token};
 use super::mongodb::MongoDbClient;
 use super::repositories::{NetworkRepository, PathRepository, PoolRepository, TokenRepository};
 use crate::config::MongoDbConfig;
-use crate::models::path::PoolDirection;
+use crate::models::path::SingleChainPathsWithAnchorToken;
 use crate::services::repositories::ConfigRepository;
 
 /// MongoDB service for managing database operations
@@ -225,43 +225,36 @@ impl MongoDbService {
     /// Add a cross-chain path
     pub async fn add_path(
         &self,
-        source_network_id: u64,
-        target_network_id: u64,
-        source_chain: Vec<PoolDirection>,
-        target_chain: Vec<PoolDirection>,
+        paths: Vec<SingleChainPathsWithAnchorToken>,
     ) -> Result<Option<bson::oid::ObjectId>> {
-        let path = Path::new(
-            source_network_id,
-            target_network_id,
-            source_chain,
-            target_chain,
-        );
+        let path = Path::new(paths);
 
         self.path_repo.insert_if_not_exists(path).await
     }
 
-    /// Find paths between this network and a target network
-    pub async fn find_paths_to_network(
+    /// Find all paths
+    pub async fn find_all_paths(&self) -> Result<Vec<Path>> {
+        self.path_repo.find_all().await
+    }
+
+    /// Find paths by anchor token
+    pub async fn find_paths_by_anchor_token(&self, anchor_token: &Address) -> Result<Vec<Path>> {
+        self.path_repo.find_by_anchor_token(anchor_token).await
+    }
+
+    /// Find paths by chain ID
+    pub async fn find_paths_by_chain_id(&self, chain_id: u64) -> Result<Vec<Path>> {
+        self.path_repo.find_by_chain_id(chain_id).await
+    }
+
+    /// Find paths by anchor token and chain ID
+    pub async fn find_paths_by_anchor_token_and_chain_id(
         &self,
-        source_network_id: u64,
-        target_network_id: u64,
+        anchor_token: &Address,
+        chain_id: u64,
     ) -> Result<Vec<Path>> {
         self.path_repo
-            .find_by_networks(source_network_id, target_network_id)
-            .await
-    }
-
-    /// Find all paths from this network
-    pub async fn find_all_paths_from_network(&self, source_network_id: u64) -> Result<Vec<Path>> {
-        self.path_repo
-            .find_by_source_network(source_network_id)
-            .await
-    }
-
-    /// Find all paths to this network
-    pub async fn find_all_paths_to_network(&self, target_network_id: u64) -> Result<Vec<Path>> {
-        self.path_repo
-            .find_by_target_network(target_network_id)
+            .find_by_anchor_token_and_chain_id(anchor_token, chain_id)
             .await
     }
 }

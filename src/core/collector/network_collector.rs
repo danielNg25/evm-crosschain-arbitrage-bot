@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use alloy::transports::http::Http;
 use alloy::transports::layers::FallbackLayer;
 use anyhow::Result;
 use chrono::Utc;
-use log::{error, info, warn};
+use log::{error, info};
 use std::num::NonZeroUsize;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, Duration};
@@ -88,7 +89,6 @@ impl NetworkCollector {
                             if let Err(e) = Self::handle_networks_update(
                                 networks,
                                 &network_registries,
-                                &mongodb_service,
                                 &metrics,
                                 &swap_event_tx,
                             )
@@ -112,9 +112,9 @@ impl NetworkCollector {
                         if !pools.is_empty() {
                             info!("Fetched {} new/updated pools from MongoDB", pools.len());
                             Self::handle_pools_update(pools, &network_registries).await;
+                            // Update timestamp after successful sync
+                            last_pool_sync = Some(Utc::now().timestamp() as u64);
                         }
-                        // Update timestamp after successful sync
-                        last_pool_sync = Some(Utc::now().timestamp() as u64);
                     }
                     Err(e) => {
                         error!("Failed to fetch pools from MongoDB: {}", e);
@@ -127,14 +127,19 @@ impl NetworkCollector {
                         if !paths.is_empty() {
                             info!("Fetched {} new/updated paths from MongoDB", paths.len());
                             Self::handle_paths_update(paths, &network_registries).await;
+                            // Update timestamp after successful sync
+                            last_path_sync = Some(Utc::now().timestamp() as u64);
                         }
-                        // Update timestamp after successful sync
-                        last_path_sync = Some(Utc::now().timestamp() as u64);
                     }
                     Err(e) => {
                         error!("Failed to fetch paths from MongoDB: {}", e);
                     }
                 }
+
+                info!(
+                    "last_network_sync: {:?}, last_pool_sync: {:?}, last_path_sync: {:?}",
+                    last_network_sync, last_pool_sync, last_path_sync
+                );
 
                 sleep(poll_duration).await;
             }
@@ -195,7 +200,6 @@ impl NetworkCollector {
     async fn handle_networks_update(
         networks: Vec<Network>,
         network_registries: &Arc<MultichainNetworkRegistry>,
-        mongodb_service: &Arc<MongoDbService>,
         metrics: &Arc<RwLock<Metrics>>,
         swap_event_tx: &mpsc::Sender<PoolChange>,
     ) -> Result<()> {
@@ -212,6 +216,27 @@ impl NetworkCollector {
 
                 let pool_registry =
                     Arc::new(RwLock::new(PoolRegistry::new(provider.clone(), network_id)));
+                if let Some(aero_factory_addresses) = network.aero_factory_addresses.clone() {
+                    pool_registry
+                        .read()
+                        .await
+                        .set_aero_factory_addresses(
+                            aero_factory_addresses
+                                .into_iter()
+                                .map(|a| Address::from_str(&a).unwrap())
+                                .collect(),
+                        )
+                        .await;
+                }
+
+                if let Some(v2_factory_to_fee) = network.v2_factory_to_fee.clone() {
+                    pool_registry
+                        .read()
+                        .await
+                        .set_factory_to_fee(v2_factory_to_fee)
+                        .await;
+                }
+
                 let token_registry = Arc::new(RwLock::new(TokenRegistry::new(network_id)));
                 let path_registry = Arc::new(RwLock::new(PathRegistry::new(network_id)));
                 let price_updater =
@@ -243,15 +268,6 @@ impl NetworkCollector {
                     .await,
                 ));
 
-                let network_pools = mongodb_service
-                    .get_pool_repo()
-                    .find_by_network_id(network_id)
-                    .await
-                    .unwrap()
-                    .into_iter()
-                    .map(|p| p.address.parse().unwrap())
-                    .collect();
-
                 let network_registry = NetworkRegistry::new(
                     network_id,
                     network_name,
@@ -268,13 +284,7 @@ impl NetworkCollector {
                     .insert(network_id, Arc::new(RwLock::new(network_registry)));
                 tokio::spawn(async move {
                     info!("Starting pool updater for network {}", network_id);
-                    if let Err(e) = pool_updater
-                        .clone()
-                        .write()
-                        .await
-                        .start(latest_block, network_pools)
-                        .await
-                    {
+                    if let Err(e) = pool_updater.read().await.start(latest_block, vec![]).await {
                         error!("Error starting pool updater: {}", e);
                     }
                 });
@@ -295,33 +305,51 @@ impl NetworkCollector {
     /// Handle pools update - PLACEHOLDER for implementation
     async fn handle_pools_update(
         pools: Vec<Pool>,
-        _network_registries: &Arc<MultichainNetworkRegistry>,
+        network_registries: &Arc<MultichainNetworkRegistry>,
     ) {
-        // TODO: Implement pool update logic
-        // - Group pools by network_id
-        // - Compare with existing pools in each network_registry
-        // - Fetch and add new pools using identify_and_fetch_pool
-        // - Remove pools that no longer exist
-        warn!(
-            "handle_pools_update: PLACEHOLDER - {} pools received",
-            pools.len()
-        );
+        let mut network_to_pools = HashMap::new();
+        for pool in pools {
+            network_to_pools
+                .entry(pool.network_id)
+                .or_insert(Vec::new())
+                .push(pool);
+        }
+        for (network_id, pools) in network_to_pools {
+            info!(
+                "Adding {} pools to pending new pools for network {}",
+                pools.len(),
+                network_id
+            );
+            network_registries
+                .get_network_registry(network_id)
+                .await
+                .unwrap()
+                .read()
+                .await
+                .pool_updater
+                .read()
+                .await
+                .add_pending_new_pools(
+                    pools
+                        .into_iter()
+                        .map(|p| p.address.parse().unwrap())
+                        .collect(),
+                )
+                .await
+                .unwrap();
+        }
     }
 
     /// Handle paths update - PLACEHOLDER for implementation
     async fn handle_paths_update(
         paths: Vec<Path>,
-        _network_registries: &Arc<MultichainNetworkRegistry>,
+        network_registries: &Arc<MultichainNetworkRegistry>,
     ) {
-        // TODO: Implement path update logic
-        // - Compare with existing paths in path_registry for each network
-        // - Add new paths
-        // - Update existing paths
-        // - Remove paths that no longer exist
-        warn!(
-            "handle_paths_update: PLACEHOLDER - {} paths received",
-            paths.len()
-        );
+        for path in paths {
+            if let Err(e) = network_registries.set_paths(path.paths).await {
+                error!("Failed to set paths: {}", e);
+            }
+        }
     }
 }
 

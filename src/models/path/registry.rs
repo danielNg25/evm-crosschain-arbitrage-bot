@@ -1,5 +1,6 @@
 use alloy::primitives::Address;
 use anyhow::Result;
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -202,7 +203,10 @@ impl PathRegistry {
         if source_path.paths.is_empty() || target_paths.is_empty() {
             return Err(anyhow::anyhow!("Path is empty"));
         }
-
+        info!(
+            "Setting paths for pool: {} on chain {}\nSource path: {:?}\nTarget paths: {:?}",
+            pool, self.chain_id, source_path, target_paths
+        );
         let mut paths_cache = self.paths_cache.write().await;
         // Overwrite existing entry to prevent duplicates - insert() replaces any existing value
         paths_cache.insert(pool, (source_path, target_paths));

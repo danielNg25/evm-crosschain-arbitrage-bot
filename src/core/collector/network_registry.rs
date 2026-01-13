@@ -97,6 +97,8 @@ impl NetworkRegistry {
 
         self.update_max_blocks_per_batch(network.max_blocks_per_batch)
             .await;
+
+        info!("Updated network {}", self.network_name);
     }
 
     pub async fn update_network_name(&mut self, network_name: String) {
@@ -106,7 +108,7 @@ impl NetworkRegistry {
         info!("Updating network name to {}", network_name);
         self.network_name = network_name.clone();
         self.profit_token_registry
-            .write()
+            .read()
             .await
             .update_chain_name(network_name)
             .await;
@@ -148,7 +150,7 @@ impl NetworkRegistry {
             wrap_native, self.network_name
         );
         self.profit_token_registry
-            .write()
+            .read()
             .await
             .set_wrap_native(wrap_native)
             .await;
@@ -186,14 +188,14 @@ impl NetworkRegistry {
             return;
         }
 
-        let mut pool_registry = self.pool_registry.write().await;
-
         if !aero_unchanged {
             info!(
                 "Updating aero factory addresses to {:?} for network {}",
                 aero_factory_addresses, self.network_name
             );
-            pool_registry
+            self.pool_registry
+                .read()
+                .await
                 .set_aero_factory_addresses(aero_factory_addresses)
                 .await;
         }
@@ -203,14 +205,17 @@ impl NetworkRegistry {
                 "Updating v2 factory to fee to {:?} for network {}",
                 v2_factory_to_fee, self.network_name
             );
-            pool_registry.set_factory_to_fee(v2_factory_to_fee).await;
+            self.pool_registry
+                .read()
+                .await
+                .set_factory_to_fee(v2_factory_to_fee)
+                .await;
         }
     }
 
     pub async fn update_multicall_address(&mut self, multicall_address: Address) {
-        let pool_updater = self.pool_updater.read().await;
-        let multicall_unchanged = multicall_address == pool_updater.multicall_address;
-        drop(pool_updater);
+        let multicall_unchanged =
+            multicall_address == self.pool_updater.read().await.multicall_address;
 
         if multicall_unchanged {
             return;
@@ -227,10 +232,8 @@ impl NetworkRegistry {
     }
 
     pub async fn update_wait_time_fetch(&mut self, wait_time_fetch: u64) {
-        let pool_updater = self.pool_updater.read().await;
-        let wait_time_fetch_unchanged = wait_time_fetch == pool_updater.wait_time_fetch;
-        drop(pool_updater);
-
+        let wait_time_fetch_unchanged =
+            wait_time_fetch == self.pool_updater.read().await.wait_time_fetch;
         if wait_time_fetch_unchanged {
             return;
         }
@@ -246,15 +249,8 @@ impl NetworkRegistry {
     }
 
     pub async fn update_max_blocks_per_batch(&mut self, max_blocks_per_batch: u64) {
-        let pool_updater = self.pool_updater.read().await;
-
         let max_blocks_per_batch_unchanged =
-            max_blocks_per_batch == pool_updater.max_blocks_per_batch;
-        info!(
-            "old: {}, new: {}, unchanged: {}",
-            pool_updater.max_blocks_per_batch, max_blocks_per_batch, max_blocks_per_batch_unchanged
-        );
-        drop(pool_updater);
+            max_blocks_per_batch == self.pool_updater.read().await.max_blocks_per_batch;
 
         if max_blocks_per_batch_unchanged {
             return;
@@ -305,12 +301,20 @@ impl MultichainNetworkRegistry {
         Ok(())
     }
 
-    pub async fn set_paths(&mut self, paths: Vec<SingleChainPathsWithAnchorToken>) -> Result<()> {
+    pub async fn set_paths(&self, paths: Vec<SingleChainPathsWithAnchorToken>) -> Result<()> {
         for path in &paths {
             // verify path is valid
             let anchor_token = path.anchor_token;
             let mut pool_to_path = HashMap::new();
             for single_path in &path.paths {
+                let profit_token = single_path.last().unwrap().token_out;
+                self.get_profit_token_registry(path.chain_id)
+                    .await
+                    .unwrap()
+                    .read()
+                    .await
+                    .add_token_if_not_exists(profit_token)
+                    .await;
                 if single_path.first().unwrap().token_in != anchor_token {
                     return Err(anyhow::anyhow!(
                         "First token in path is not the anchor token"
@@ -345,7 +349,7 @@ impl MultichainNetworkRegistry {
 
             for (pool, paths) in pool_to_path {
                 path_registry
-                    .write()
+                    .read()
                     .await
                     .set_paths(
                         pool,
@@ -446,7 +450,7 @@ impl MultichainNetworkRegistry {
         };
         let profit_token_registry = self.get_profit_token_registry(chain_id).await.unwrap();
         profit_token_registry
-            .write()
+            .read()
             .await
             .add_token(token, config)
             .await;

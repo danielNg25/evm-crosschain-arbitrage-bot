@@ -45,14 +45,12 @@ impl PoolRegistry {
         self.provider = Arc::new(provider);
     }
 
-    pub async fn set_factory_to_fee(&mut self, factory_to_fee: HashMap<String, u64>) {
-        let mut factory_to_fee_lock = self.factory_to_fee.write().await;
-        *factory_to_fee_lock = factory_to_fee;
+    pub async fn set_factory_to_fee(&self, factory_to_fee: HashMap<String, u64>) {
+        *self.factory_to_fee.write().await = factory_to_fee.clone();
     }
 
-    pub async fn set_aero_factory_addresses(&mut self, aero_factory_addresses: Vec<Address>) {
-        let mut aero_factory_addresses_lock = self.aero_factory_addresses.write().await;
-        *aero_factory_addresses_lock = aero_factory_addresses;
+    pub async fn set_aero_factory_addresses(&self, aero_factory_addresses: Vec<Address>) {
+        *self.aero_factory_addresses.write().await = aero_factory_addresses.clone();
     }
 
     /// Set network ID for this registry
@@ -136,6 +134,10 @@ impl PoolRegistry {
             .entry(pool_type)
             .or_insert_with(Vec::new)
             .push(address);
+    }
+
+    pub async fn exists_pool(&self, address: &Address) -> bool {
+        self.by_address.read().await.contains_key(address)
     }
 
     pub async fn get_pool(

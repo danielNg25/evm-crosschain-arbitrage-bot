@@ -31,6 +31,7 @@ use crate::models::token::TokenRegistry;
 pub const Q96_U128: u128 = 1 << 96;
 pub const FEE_DENOMINATOR: u32 = 1000000;
 pub const RAMSES_FACTOR: u128 = 10000000000;
+pub const CHUNK_SIZE: usize = 250;
 
 /// Enum representing the type of V3 pool
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -789,7 +790,10 @@ pub async fn fetch_v3_pool<P: Provider + Send + Sync>(
         v3_pool_type,
     );
 
-    fetch_v3_ticks(provider, &mut pool, block_number, multicall_address).await?;
+    if let Err(e) = fetch_v3_ticks(provider, &mut pool, block_number, multicall_address).await {
+        error!("Error fetching ticks for pool {}: {}", pool_address, e);
+        return Err(e);
+    }
 
     if pool.pool_type == V3PoolType::RamsesV2 {
         let ratio_conversion_factor =
@@ -825,7 +829,7 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
             // Split word bitmap fetching into chunks
             let mut all_bitmaps = Vec::new();
             let contract = IUniswapV3Pool::new(pool.address, provider);
-            for chunk in (min_word..=max_word).collect::<Vec<_>>().chunks(250) {
+            for chunk in (min_word..=max_word).collect::<Vec<_>>().chunks(CHUNK_SIZE) {
                 let mut multicall =
                     MulticallBuilder::new_dynamic(provider).address(multicall_address);
                 for &word_pos in chunk {
@@ -945,7 +949,7 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
             // Split word bitmap fetching into chunks
             let mut all_bitmaps = Vec::new();
             let contract = AlgebraTwoSideFee::new(pool.address, provider);
-            for chunk in (min_word..=max_word).collect::<Vec<_>>().chunks(250) {
+            for chunk in (min_word..=max_word).collect::<Vec<_>>().chunks(CHUNK_SIZE) {
                 let mut multicall =
                     MulticallBuilder::new_dynamic(provider).address(multicall_address);
                 for &word_pos in chunk {
@@ -979,7 +983,7 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
     match pool.pool_type {
         V3PoolType::UniswapV3 | V3PoolType::RamsesV2 | V3PoolType::PancakeV3 => {
             let contract = IUniswapV3Pool::new(pool.address, provider);
-            for chunk in tick_indices.chunks(250) {
+            for chunk in tick_indices.chunks(CHUNK_SIZE) {
                 let mut multicall =
                     MulticallBuilder::new_dynamic(provider).address(multicall_address);
                 for &tick_index in chunk {
@@ -1003,7 +1007,7 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
         | V3PoolType::AlgebraTwoSideFee
         | V3PoolType::AlgebraPoolFeeInState => {
             let contract = AlgebraV3Pool::new(pool.address, provider);
-            for chunk in tick_indices.chunks(250) {
+            for chunk in tick_indices.chunks(CHUNK_SIZE) {
                 let mut multicall =
                     MulticallBuilder::new_dynamic(provider).address(multicall_address);
                 for &tick_index in chunk {

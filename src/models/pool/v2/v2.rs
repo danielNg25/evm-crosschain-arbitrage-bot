@@ -85,8 +85,6 @@ impl UniswapV2Pool {
         fee: U256,
     ) -> Self {
         let current_time = chrono::Utc::now().timestamp() as u64;
-        info!("decimals0: {}", decimals_0);
-        info!("decimals1: {}", decimals_1);
         Self {
             pool_type,
             address,

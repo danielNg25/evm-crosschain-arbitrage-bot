@@ -91,6 +91,7 @@ impl MultichainProfitTokenRegistry {
             price: None,
             default_price: 1.0,
         };
+        info!("Adding profit token: {} on chain {}", token, chain_id);
         self.profit_token_registries
             .write()
             .await
@@ -233,6 +234,22 @@ impl ProfitTokenRegistry {
             }
         });
         Ok(())
+    }
+
+    pub async fn add_token_if_not_exists(&self, token: Address) {
+        if !self.tokens.read().await.contains_key(&token) {
+            self.add_token(
+                token,
+                ProfitToken {
+                    address: token,
+                    min_profit: U256::ZERO,
+                    price_source: Some(PriceSourceType::GeckoTerminal),
+                    price: None,
+                    default_price: 1.0,
+                },
+            )
+            .await;
+        }
     }
 
     /// Add a profit token with its configuration

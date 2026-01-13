@@ -57,7 +57,10 @@ impl PoolUpdaterLatestBlock {
                         .await
                         .set_last_processed_block(start_block)
                         .await;
-                    info!("Initialized last processed block to {}", start_block);
+                    info!(
+                        "CHAIN ID: {} | Initialized last processed block to {}",
+                        chain_id, start_block
+                    );
                 } else if start_block > 0 && start_block > current_block {
                     // Override existing block if a higher start_block is provided
                     pool_registry
@@ -66,8 +69,8 @@ impl PoolUpdaterLatestBlock {
                         .set_last_processed_block(start_block)
                         .await;
                     info!(
-                        "Updated last processed block from {} to {}",
-                        current_block, start_block
+                        "CHAIN ID: {} | Updated last processed block from {} to {}",
+                        chain_id, current_block, start_block
                     );
                 }
             }
@@ -96,7 +99,7 @@ impl PoolUpdaterLatestBlock {
         }
     }
 
-    pub async fn start(&mut self, initial_block: u64, initial_pools: Vec<Address>) -> Result<()> {
+    pub async fn start(&self, initial_block: u64, initial_pools: Vec<Address>) -> Result<()> {
         // initialize the registry
         let factory_to_fee = self.pool_registry.read().await.get_factory_to_fee().await;
         let aero_factory_addresses = self
@@ -134,10 +137,9 @@ impl PoolUpdaterLatestBlock {
                 .get_last_processed_block()
                 .await;
 
-            let mut pending_new_pools_guard = self.pending_new_pools.write().await;
-            while pending_new_pools_guard.len() > 0 {
-                let pool_address = pending_new_pools_guard.pop().unwrap();
-                let pool = identify_and_fetch_pool(
+            while self.pending_new_pools.read().await.len() > 0 {
+                let pool_address = self.pending_new_pools.write().await.pop().unwrap();
+                if let Ok(pool) = identify_and_fetch_pool(
                     &self.provider,
                     pool_address,
                     BlockId::Number(BlockNumberOrTag::Number(last_processed_block)),
@@ -151,8 +153,21 @@ impl PoolUpdaterLatestBlock {
                         .get_aero_factory_addresses()
                         .await,
                 )
-                .await?;
-                self.pool_registry.write().await.add_pool(pool).await;
+                .await
+                {
+                    self.pool_registry.read().await.add_pool(pool).await;
+
+                    info!(
+                        "CHAIN ID: {} | Added pool {} to pool registry",
+                        self.chain_id, pool_address
+                    );
+                } else {
+                    error!(
+                        "CHAIN ID: {} | Error fetching pool {} from identify_and_fetch_pool",
+                        self.chain_id, pool_address
+                    );
+                    continue;
+                }
             }
             // Get latest block number with retry logic
             let mut backoff = Duration::from_millis(50);
@@ -164,7 +179,8 @@ impl PoolUpdaterLatestBlock {
                     }
                     Err(e) => {
                         error!(
-                            "Error fetching block number, retrying in {}s: {}",
+                            "CHAIN ID: {} | Error fetching block number, retrying in {}s: {}",
+                            self.chain_id,
                             backoff.as_secs(),
                             e
                         );
@@ -188,7 +204,10 @@ impl PoolUpdaterLatestBlock {
             while current_block <= latest_block {
                 let batch_end =
                     std::cmp::min(current_block + self.max_blocks_per_batch - 1, latest_block);
-                info!("Processing blocks: {} - {}", current_block, batch_end);
+                info!(
+                    "CHAIN ID: {} | Processing blocks: {} - {}",
+                    self.chain_id, current_block, batch_end
+                );
 
                 // Process pools for confirmed blocks
                 match proccess_pools(
@@ -213,14 +232,14 @@ impl PoolUpdaterLatestBlock {
                             .set_last_processed_block(batch_end)
                             .await;
                         info!(
-                            "Successfully processed blocks: {} - {}",
-                            current_block, batch_end
+                            "CHAIN ID: {} | Successfully processed blocks: {} - {}",
+                            self.chain_id, current_block, batch_end
                         );
                     }
                     Err(e) => {
                         error!(
-                            "Error processing blocks {} - {}: {}",
-                            current_block, batch_end, e
+                            "CHAIN ID: {} | Error processing blocks {} - {}: {}",
+                            self.chain_id, current_block, batch_end, e
                         );
                         // Don't update last_processed_block on error
                         break;
@@ -251,25 +270,39 @@ impl PoolUpdaterLatestBlock {
         self.max_blocks_per_batch = max_blocks_per_batch;
     }
 
-    pub async fn add_pending_new_pools(&mut self, new_pools: Vec<Address>) -> Result<()> {
-        let mut pending_new_pools_guard = self.pending_new_pools.write().await;
+    pub async fn add_pending_new_pools(&self, new_pools: Vec<Address>) -> Result<()> {
         for address in new_pools {
+            info!(
+                "CHAIN ID: {} | Checking if pool {} is already registered",
+                self.chain_id, address
+            );
             // Check if pool address is not already registered in pool_registry
-            if self
-                .pool_registry
-                .read()
-                .await
-                .get_pool(&address)
-                .await
-                .is_none()
-            {
+            if !self.pool_registry.read().await.exists_pool(&address).await {
                 // If not, add to self.pending_new_pools (if not already present)
-                if !pending_new_pools_guard.contains(&address) {
-                    pending_new_pools_guard.push(address);
+                if !self.pending_new_pools.read().await.contains(&address) {
+                    info!(
+                        "CHAIN ID: {} | Adding pool {} to pending new pools",
+                        self.chain_id, address
+                    );
+                    self.pending_new_pools.write().await.push(address);
+                } else {
+                    info!(
+                        "CHAIN ID: {} | Pool {} is already in pending new pools",
+                        self.chain_id, address
+                    );
                 }
+            } else {
+                info!(
+                    "CHAIN ID: {} | Pool {} is already in pool registry",
+                    self.chain_id, address
+                );
             }
+            info!(
+                "CHAIN ID: {} | Pending new pools: {:?}",
+                self.chain_id,
+                self.pending_new_pools.read().await
+            );
         }
-        drop(pending_new_pools_guard);
         Ok(())
     }
 }
@@ -310,7 +343,8 @@ async fn proccess_pools<P: Provider + Send + Sync + 'static>(
                 let received_at = Utc::now().timestamp_millis() as u64;
                 let mut swap_events = Vec::new();
                 info!(
-                    "Processing {} events from {} to {}",
+                    "CHAIN ID: {} | Processing {} events from {} to {}",
+                    chain_id,
                     events.len(),
                     from_block.as_number().unwrap(),
                     to_block.as_number().unwrap()
@@ -320,7 +354,8 @@ async fn proccess_pools<P: Provider + Send + Sync + 'static>(
                     {
                         if let Err(e) = pool.write().await.apply_log(&event) {
                             error!(
-                                "Error applying event {} for pool {}, event {}",
+                                "CHAIN ID: {} | Error applying event {} for pool {}, event {}",
+                                chain_id,
                                 e,
                                 event.address(),
                                 event.transaction_hash.unwrap()
@@ -353,7 +388,10 @@ async fn proccess_pools<P: Provider + Send + Sync + 'static>(
                             })
                             .await
                         {
-                            error!("Error sending swap event to simulator: {}", e);
+                            error!(
+                                "CHAIN ID: {} | Error sending swap event to simulator: {}",
+                                chain_id, e
+                            );
                         }
                     }
                 }
@@ -361,7 +399,8 @@ async fn proccess_pools<P: Provider + Send + Sync + 'static>(
             }
             Err(e) => {
                 error!(
-                    "Error fetching events, retrying in {}s: {}",
+                    "CHAIN ID: {} | Error fetching events, retrying in {}s: {}",
+                    chain_id,
                     backoff.as_secs(),
                     e
                 );

@@ -1,6 +1,8 @@
 use crate::models::path::PoolDirection;
+use crate::services::database::models::utils::address_to_string;
 use crate::services::database::models::Path;
 use crate::services::database::mongodb::MongoDbClient;
+use alloy::primitives::Address;
 use anyhow::Result;
 use bson::doc;
 use chrono::Utc;
@@ -27,29 +29,20 @@ impl PathRepository {
         // Check if a similar path already exists
         // We consider paths with same source/target networks and same chains as duplicates
         let filter = doc! {
-            "source_network_id": path.source_network_id as i64,
-            "target_network_id": path.target_network_id as i64,
-            "source_chain": bson::to_bson(&path.source_chain)?,
-            "target_chain": bson::to_bson(&path.target_chain)?
+            "paths": bson::to_bson(&path.paths)?
         };
 
         let existing = collection.find_one(filter).await?;
 
         if let Some(existing_path) = existing {
-            debug!(
-                "Path from network {} to {} already exists",
-                path.source_network_id, path.target_network_id
-            );
+            debug!("Path already exists");
             return Ok(existing_path.id);
         }
 
         // Insert new path
         let result = collection.insert_one(path.clone()).await?;
         let id = result.inserted_id.as_object_id();
-        info!(
-            "Inserted new path: {} -> {} (id: {:?})",
-            path.source_network_id, path.target_network_id, id
-        );
+        info!("Inserted new path (id: {:?})", id);
 
         Ok(id)
     }
@@ -63,51 +56,65 @@ impl PathRepository {
         Ok(path)
     }
 
-    /// Find paths by source and target network IDs
-    pub async fn find_by_networks(
+    /// Find all paths
+    pub async fn find_all(&self) -> Result<Vec<Path>> {
+        let collection = self.client.collection::<Path>("paths");
+        let filter = doc! {};
+        let paths = collection
+            .find(filter)
+            .await?
+            .try_collect::<Vec<Path>>()
+            .await?;
+
+        Ok(paths)
+    }
+
+    pub async fn find_by_anchor_token(&self, anchor_token: &Address) -> Result<Vec<Path>> {
+        let collection = self.client.collection::<Path>("paths");
+        let anchor_token_str = address_to_string(anchor_token);
+        let filter = doc! { "paths": { "$elemMatch": { "anchor_token": &anchor_token_str } } };
+        let paths = collection
+            .find(filter)
+            .await?
+            .try_collect::<Vec<Path>>()
+            .await?;
+
+        Ok(paths)
+    }
+
+    pub async fn find_by_chain_id(&self, chain_id: u64) -> Result<Vec<Path>> {
+        let collection = self.client.collection::<Path>("paths");
+        let filter = doc! { "paths": { "$elemMatch": { "chain_id": chain_id as i64 } } };
+        let paths = collection
+            .find(filter)
+            .await?
+            .try_collect::<Vec<Path>>()
+            .await?;
+
+        Ok(paths)
+    }
+
+    /// Find paths by anchor token and chain ID
+    pub async fn find_by_anchor_token_and_chain_id(
         &self,
-        source_network_id: u64,
-        target_network_id: u64,
+        anchor_token: &Address,
+        chain_id: u64,
     ) -> Result<Vec<Path>> {
         let collection = self.client.collection::<Path>("paths");
+        let anchor_token_str = address_to_string(anchor_token);
         let filter = doc! {
-            "source_network_id": source_network_id as i64,
-            "target_network_id": target_network_id as i64
+            "paths": {
+                "$elemMatch": {
+                    "anchor_token": &anchor_token_str,
+                    "chain_id": chain_id as i64
+                }
+            }
         };
-        let mut cursor = collection.find(filter).await?;
-        let mut paths = Vec::new();
-
-        while let Some(path) = cursor.try_next().await? {
-            paths.push(path);
-        }
-
-        Ok(paths)
-    }
-
-    /// Find all paths for a given source network
-    pub async fn find_by_source_network(&self, source_network_id: u64) -> Result<Vec<Path>> {
-        let collection = self.client.collection::<Path>("paths");
-        let filter = doc! { "source_network_id": source_network_id as i64 };
-        let mut cursor = collection.find(filter).await?;
-        let mut paths = Vec::new();
-
-        while let Some(path) = cursor.try_next().await? {
-            paths.push(path);
-        }
-
-        Ok(paths)
-    }
-
-    /// Find all paths for a given target network
-    pub async fn find_by_target_network(&self, target_network_id: u64) -> Result<Vec<Path>> {
-        let collection = self.client.collection::<Path>("paths");
-        let filter = doc! { "target_network_id": target_network_id as i64 };
-        let mut cursor = collection.find(filter).await?;
-        let mut paths = Vec::new();
-
-        while let Some(path) = cursor.try_next().await? {
-            paths.push(path);
-        }
+        let paths = collection
+            .find(filter)
+            .await?
+            .try_collect::<Vec<Path>>()
+            .await?;
 
         Ok(paths)
     }
@@ -229,19 +236,6 @@ impl PathRepository {
         let count = collection.count_documents(filter).await?;
 
         Ok(count)
-    }
-
-    /// Find all paths (across all networks)
-    pub async fn find_all(&self) -> Result<Vec<Path>> {
-        let collection = self.client.collection::<Path>("paths");
-        let mut cursor = collection.find(doc! {}).await?;
-        let mut paths = Vec::new();
-
-        while let Some(path) = cursor.try_next().await? {
-            paths.push(path);
-        }
-
-        Ok(paths)
     }
 
     /// Find paths updated since the given timestamp
