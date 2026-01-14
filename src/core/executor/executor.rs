@@ -5,7 +5,7 @@ use log::error;
 use std::{sync::Arc, time::Duration};
 
 use crate::core::processor::processor::CrossChainArbitrageProcessor;
-use crate::core::Logger;
+use crate::core::OpportunityLogger;
 
 use crate::core::processor::processor::Opportunity;
 
@@ -16,7 +16,7 @@ pub struct ExecutorConfig {
 
 pub struct Executor {
     processor: Arc<CrossChainArbitrageProcessor>,
-    loggers: Arc<Vec<Arc<dyn Logger>>>,
+    loggers: Arc<Vec<Arc<dyn OpportunityLogger>>>,
     executing_paths: Arc<DashMap<String, String>>,
     config: ExecutorConfig,
 }
@@ -24,7 +24,7 @@ pub struct Executor {
 impl Executor {
     pub async fn new(
         processor: Arc<CrossChainArbitrageProcessor>,
-        loggers: Arc<Vec<Arc<dyn Logger>>>,
+        loggers: Arc<Vec<Arc<dyn OpportunityLogger>>>,
         executing_paths: Arc<DashMap<String, String>>,
         config: ExecutorConfig,
     ) -> Self {

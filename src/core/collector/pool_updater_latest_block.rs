@@ -1,5 +1,6 @@
 use crate::blockchain::fetch_events;
 use crate::blockchain::pool_fetcher::identify_and_fetch_pool;
+use crate::core::ErrorLogger;
 use crate::models::pool::base::Topic;
 use crate::models::pool::PoolRegistry;
 use crate::models::token::TokenRegistry;
@@ -31,6 +32,7 @@ pub struct PoolUpdaterLatestBlock {
     pub multicall_address: Address,
     pub wait_time_fetch: u64,
     chain_id: u64,
+    error_loggers: Vec<Arc<dyn ErrorLogger>>,
 }
 
 impl PoolUpdaterLatestBlock {
@@ -45,6 +47,7 @@ impl PoolUpdaterLatestBlock {
         max_blocks_per_batch: u64,
         wait_time_fetch: u64,
         chain_id: u64,
+        error_loggers: Vec<Arc<dyn ErrorLogger>>,
     ) -> Self {
         // Initialize the last_processed_block in the registry if it's currently 0
         tokio::spawn({
@@ -96,6 +99,7 @@ impl PoolUpdaterLatestBlock {
             multicall_address,
             wait_time_fetch,
             chain_id,
+            error_loggers,
         }
     }
 
@@ -221,6 +225,8 @@ impl PoolUpdaterLatestBlock {
                     self.topics.clone(),
                     self.profitable_topics.clone(),
                     self.chain_id,
+                    self.wait_time_fetch,
+                    self.error_loggers.clone(),
                 )
                 .await
                 {
@@ -318,6 +324,8 @@ async fn proccess_pools<P: Provider + Send + Sync + 'static>(
     topics: Arc<Vec<Topic>>,
     profitable_topics: Arc<HashSet<Topic>>,
     chain_id: u64,
+    wait_time_fetch: u64,
+    error_loggers: Vec<Arc<dyn ErrorLogger>>,
 ) -> Result<()> {
     let addresses: Vec<Address> = pool_registry.read().await.get_all_addresses().await.clone();
     let addresses_len = addresses.len();
@@ -325,8 +333,8 @@ async fn proccess_pools<P: Provider + Send + Sync + 'static>(
         return Ok(());
     }
 
-    let mut backoff = Duration::from_millis(50);
-    let max_backoff = Duration::from_millis(500);
+    let mut backoff = Duration::from_millis(wait_time_fetch);
+    let max_backoff = Duration::from_millis(wait_time_fetch * 10);
 
     let topics = topics.clone().to_vec();
     loop {
@@ -398,12 +406,22 @@ async fn proccess_pools<P: Provider + Send + Sync + 'static>(
                 break;
             }
             Err(e) => {
+                let error_msg = e.to_string();
                 error!(
-                    "CHAIN ID: {} | Error fetching events, retrying in {}s: {}",
+                    "CHAIN ID: {} | Error fetching events, retrying in {} milliseconds: {}",
                     chain_id,
-                    backoff.as_secs(),
-                    e
+                    backoff.as_millis(),
+                    error_msg
                 );
+                for logger in error_loggers.iter() {
+                    let logger = Arc::clone(logger);
+                    let error_msg = error_msg.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = logger.log_error(chain_id, &error_msg).await {
+                            error!("Error logging error: {:?}", e);
+                        }
+                    });
+                }
                 tokio::time::sleep(backoff).await;
                 backoff = std::cmp::min(backoff * 2, max_backoff);
             }

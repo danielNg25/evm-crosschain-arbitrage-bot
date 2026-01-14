@@ -204,8 +204,8 @@ impl PathRegistry {
             return Err(anyhow::anyhow!("Path is empty"));
         }
         info!(
-            "Setting paths for pool: {} on chain {}\nSource path: {:?}\nTarget paths: {:?}",
-            pool, self.chain_id, source_path, target_paths
+            "Setting paths for pool: {} on chain {}",
+            pool, self.chain_id
         );
         let mut paths_cache = self.paths_cache.write().await;
         // Overwrite existing entry to prevent duplicates - insert() replaces any existing value

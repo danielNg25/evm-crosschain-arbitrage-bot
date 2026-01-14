@@ -2,7 +2,7 @@ use crate::core::processor::processor::Opportunity;
 use anyhow::Result;
 
 #[async_trait::async_trait]
-pub trait Logger: Send + Sync {
+pub trait OpportunityLogger: Send + Sync {
     async fn log_opportunity(&self, opportunity_id: &str, opportunity: &Opportunity) -> Result<()>;
 
     async fn log_opportunity_again(
@@ -10,4 +10,9 @@ pub trait Logger: Send + Sync {
         opportunity_id: &str,
         opportunity: &Opportunity,
     ) -> Result<()>;
+}
+
+#[async_trait::async_trait]
+pub trait ErrorLogger: Send + Sync {
+    async fn log_error(&self, chain_id: u64, error: &str) -> Result<()>;
 }

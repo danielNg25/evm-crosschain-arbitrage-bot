@@ -13,3 +13,6 @@ default_recheck_interval = 60
 [telegram]
 token = ""
 chat_id = ""
+error_thread_id = 10
+opp_thread_id = 1
+error_log_interval_secs = 60

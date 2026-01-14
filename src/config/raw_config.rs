@@ -26,6 +26,9 @@ pub struct ExecutorConfig {
 pub struct TelegramConfig {
     pub token: String,
     pub chat_id: String,
+    pub error_thread_id: u64,
+    pub opp_thread_id: u64,
+    pub error_log_interval_secs: u64,
 }
 
 /// Main application configuration

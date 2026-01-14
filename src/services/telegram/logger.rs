@@ -1,29 +1,49 @@
+use log::info;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::{
-    core::{processor::processor::Opportunity, Logger, MultichainNetworkRegistry},
+    core::{
+        processor::processor::Opportunity, ErrorLogger, MultichainNetworkRegistry,
+        OpportunityLogger,
+    },
     services::TelegramService,
 };
 use anyhow::Result;
+use std::time::{Duration, Instant};
+
 pub struct TelegramLogger {
     service: TelegramService,
     multichain_network_registry: Arc<MultichainNetworkRegistry>,
+    error_thread_id: u64,
+    error_log_interval_secs: u64,
+    last_log_time: Arc<Mutex<Instant>>,
 }
 
 impl TelegramLogger {
-    pub fn new(
+    pub async fn new(
         service: TelegramService,
         multichain_network_registry: Arc<MultichainNetworkRegistry>,
+        error_thread_id: u64,
+        error_log_interval_secs: u64,
     ) -> Self {
+        // Send test message to the opp thread
+        service
+            .send_markdown_message_to_general_channel("Test message")
+            .await
+            .unwrap();
         Self {
             service,
             multichain_network_registry,
+            error_thread_id,
+            error_log_interval_secs,
+            last_log_time: Arc::new(Mutex::new(Instant::now())),
         }
     }
 }
 
 #[async_trait::async_trait]
-impl Logger for TelegramLogger {
+impl OpportunityLogger for TelegramLogger {
     async fn log_opportunity(
         &self,
         _opportunity_id: &str,
@@ -112,5 +132,21 @@ impl Logger for TelegramLogger {
         opportunity: &Opportunity,
     ) -> Result<()> {
         self.log_opportunity(opportunity_id, opportunity).await
+    }
+}
+
+#[async_trait::async_trait]
+impl ErrorLogger for TelegramLogger {
+    async fn log_error(&self, chain_id: u64, error: &str) -> Result<()> {
+        if self.last_log_time.lock().await.elapsed()
+            < Duration::from_secs(self.error_log_interval_secs)
+        {
+            return Ok(());
+        }
+        *self.last_log_time.lock().await = Instant::now();
+        let message = format!("🔴 *{}*: _{}_", chain_id, error);
+        self.service
+            .send_markdown_message_to_thread(&message, self.error_thread_id)
+            .await
     }
 }

@@ -75,7 +75,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mongodb_service.clone(),
         metrics.clone(),
         swap_event_tx,
+        vec![],
     ));
+
+    let telegram_logger = Arc::new(
+        TelegramLogger::new(
+            TelegramService::new(config.telegram.token, config.telegram.chat_id),
+            network_collector.network_registries.clone(),
+            config.telegram.error_thread_id,
+            config.telegram.error_log_interval_secs,
+        )
+        .await,
+    );
+
+    network_collector
+        .add_error_logger(telegram_logger.clone())
+        .await;
 
     network_collector.start_mongodb_polling(config.mongodb.poll_interval_secs);
 
@@ -102,11 +117,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
     });
-
-    let telegram_logger = Arc::new(TelegramLogger::new(
-        TelegramService::new(config.telegram.token, config.telegram.chat_id),
-        network_collector.network_registries.clone(),
-    ));
 
     let executor = Arc::new(
         Executor::new(

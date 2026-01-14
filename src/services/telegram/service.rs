@@ -104,6 +104,20 @@ impl TelegramService {
             .await
     }
 
+    pub async fn send_markdown_message_to_thread(
+        &self,
+        message: &str,
+        thread_id: u64,
+    ) -> Result<()> {
+        self.send_message(
+            message,
+            Some(ParseMode::MarkdownV2),
+            Some(thread_id),
+            Some(true),
+        )
+        .await
+    }
+
     /// Get the bot instance (for advanced operations)
     pub fn bot(&self) -> &Throttle<Bot> {
         &self.bot

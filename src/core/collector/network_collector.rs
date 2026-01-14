@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::core::{MultichainNetworkRegistry, NetworkRegistry, PoolChange};
+use crate::core::{ErrorLogger, MultichainNetworkRegistry, NetworkRegistry, PoolChange};
 use crate::models::profit_token::price_updater::PriceUpdater;
 use crate::models::profit_token::ProfitTokenRegistry;
 use crate::utils::metrics::Metrics;
@@ -15,7 +15,7 @@ use anyhow::Result;
 use chrono::Utc;
 use log::{error, info};
 use std::num::NonZeroUsize;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::{sleep, Duration};
 use tower::ServiceBuilder;
 
@@ -31,6 +31,7 @@ pub struct NetworkCollector {
     pub network_registries: Arc<MultichainNetworkRegistry>,
     pub metrics: Arc<RwLock<Metrics>>,
     pub swap_event_tx: mpsc::Sender<PoolChange>,
+    pub error_loggers: Arc<Mutex<Vec<Arc<dyn ErrorLogger>>>>,
 }
 
 impl NetworkCollector {
@@ -38,12 +39,14 @@ impl NetworkCollector {
         mongodb_service: Arc<MongoDbService>,
         metrics: Arc<RwLock<Metrics>>,
         swap_event_tx: mpsc::Sender<PoolChange>,
+        error_loggers: Vec<Arc<dyn ErrorLogger>>,
     ) -> Self {
         Self {
             mongodb_service,
             network_registries: Arc::new(MultichainNetworkRegistry::new()),
             metrics,
             swap_event_tx,
+            error_loggers: Arc::new(Mutex::new(error_loggers)),
         }
     }
 
@@ -54,6 +57,11 @@ impl NetworkCollector {
         Ok(())
     }
 
+    pub async fn add_error_logger(&self, error_logger: Arc<dyn ErrorLogger>) {
+        info!("Adding error logger");
+        self.error_loggers.lock().await.push(error_logger);
+    }
+
     /// Start polling MongoDB for changes in networks, pools, and paths collections
     /// Uses incremental sync - only fetches documents updated since last sync
     /// Polls in order: networks -> pools -> paths
@@ -62,7 +70,7 @@ impl NetworkCollector {
         let network_registries = Arc::clone(&self.network_registries);
         let metrics = Arc::clone(&self.metrics);
         let swap_event_tx = self.swap_event_tx.clone();
-
+        let error_loggers = Arc::clone(&self.error_loggers);
         tokio::spawn(async move {
             let poll_duration = Duration::from_secs(poll_interval_secs);
 
@@ -91,6 +99,7 @@ impl NetworkCollector {
                                 &network_registries,
                                 &metrics,
                                 &swap_event_tx,
+                                &error_loggers,
                             )
                             .await
                             {
@@ -202,6 +211,7 @@ impl NetworkCollector {
         network_registries: &Arc<MultichainNetworkRegistry>,
         metrics: &Arc<RwLock<Metrics>>,
         swap_event_tx: &mpsc::Sender<PoolChange>,
+        error_loggers: &Arc<Mutex<Vec<Arc<dyn ErrorLogger>>>>,
     ) -> Result<()> {
         let network_len = networks.len();
         for network in networks {
@@ -264,6 +274,7 @@ impl NetworkCollector {
                         network.max_blocks_per_batch,
                         network.wait_time_fetch,
                         network_id,
+                        error_loggers.lock().await.clone(),
                     )
                     .await,
                 ));
