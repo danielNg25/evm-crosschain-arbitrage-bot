@@ -29,7 +29,7 @@ impl TelegramLogger {
     ) -> Self {
         // Send test message to the opp thread
         service
-            .send_markdown_message_to_general_channel("Test message")
+            .send_markdown_message_to_general_channel("Init Telegram Logger")
             .await
             .unwrap();
         Self {
@@ -37,7 +37,9 @@ impl TelegramLogger {
             multichain_network_registry,
             error_thread_id,
             error_log_interval_secs,
-            last_log_time: Arc::new(Mutex::new(Instant::now())),
+            last_log_time: Arc::new(Mutex::new(
+                Instant::now() - Duration::from_secs(86400 * 365),
+            )),
         }
     }
 }
@@ -144,7 +146,7 @@ impl ErrorLogger for TelegramLogger {
             return Ok(());
         }
         *self.last_log_time.lock().await = Instant::now();
-        let message = format!("🔴 *{}*: _{}_", chain_id, error);
+        let message = format!("🔴 CHAIN ID *{}*: _{}_", chain_id, error);
         self.service
             .send_markdown_message_to_thread(&message, self.error_thread_id)
             .await

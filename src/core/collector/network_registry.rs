@@ -130,8 +130,8 @@ impl NetworkRegistry {
             .await
             .set_provider(provider.clone())
             .await;
-
-        self.pool_updater.write().await.set_provider(provider).await;
+        self.pool_updater.read().await.set_provider(provider).await;
+        info!("Updated RPCs for network {}", self.network_name);
     }
 
     pub async fn update_wrap_native(&mut self, wrap_native: Address) {
@@ -154,6 +154,7 @@ impl NetworkRegistry {
             .await
             .set_wrap_native(wrap_native)
             .await;
+        info!("Updated wrap native for network {}", self.network_name);
     }
 
     pub async fn update_min_profit_usd(&mut self, min_profit_usd: f64) {
@@ -169,6 +170,7 @@ impl NetworkRegistry {
             .await
             .set_min_profit_usd(min_profit_usd)
             .await;
+        info!("Updated min profit usd for network {}", self.network_name);
     }
 
     pub async fn update_factory(
@@ -211,11 +213,18 @@ impl NetworkRegistry {
                 .set_factory_to_fee(v2_factory_to_fee)
                 .await;
         }
+        info!("Updated factory for network {}", self.network_name);
     }
 
     pub async fn update_multicall_address(&mut self, multicall_address: Address) {
-        let multicall_unchanged =
-            multicall_address == self.pool_updater.read().await.multicall_address;
+        let multicall_unchanged = multicall_address
+            == *self
+                .pool_updater
+                .read()
+                .await
+                .multicall_address
+                .read()
+                .await;
 
         if multicall_unchanged {
             return;
@@ -225,15 +234,19 @@ impl NetworkRegistry {
             multicall_address, self.network_name
         );
         self.pool_updater
-            .write()
+            .read()
             .await
             .set_multicall_address(multicall_address)
             .await;
+        info!(
+            "Updated multicall address for network {}",
+            self.network_name
+        );
     }
 
     pub async fn update_wait_time_fetch(&mut self, wait_time_fetch: u64) {
         let wait_time_fetch_unchanged =
-            wait_time_fetch == self.pool_updater.read().await.wait_time_fetch;
+            wait_time_fetch == *self.pool_updater.read().await.wait_time_fetch.read().await;
         if wait_time_fetch_unchanged {
             return;
         }
@@ -242,15 +255,22 @@ impl NetworkRegistry {
             wait_time_fetch, self.network_name
         );
         self.pool_updater
-            .write()
+            .read()
             .await
             .set_wait_time_fetch(wait_time_fetch)
             .await;
+        info!("Updated wait time fetch for network {}", self.network_name);
     }
 
     pub async fn update_max_blocks_per_batch(&mut self, max_blocks_per_batch: u64) {
-        let max_blocks_per_batch_unchanged =
-            max_blocks_per_batch == self.pool_updater.read().await.max_blocks_per_batch;
+        let max_blocks_per_batch_unchanged = max_blocks_per_batch
+            == *self
+                .pool_updater
+                .read()
+                .await
+                .max_blocks_per_batch
+                .read()
+                .await;
 
         if max_blocks_per_batch_unchanged {
             return;
@@ -260,10 +280,14 @@ impl NetworkRegistry {
             max_blocks_per_batch, self.network_name
         );
         self.pool_updater
-            .write()
+            .read()
             .await
             .set_max_blocks_per_batch(max_blocks_per_batch)
             .await;
+        info!(
+            "Updated max blocks per batch for network {}",
+            self.network_name
+        );
     }
 }
 

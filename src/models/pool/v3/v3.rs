@@ -9,6 +9,7 @@ use crate::models::pool::v3::{get_ramses_quoter, is_ramses_factory, MAX_TICK_I32
 use crate::services::Database;
 use alloy::primitives::{aliases::U24, Address, Signed, U160, U256};
 use alloy::primitives::{FixedBytes, Uint, U128};
+use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
 use alloy::{
@@ -660,8 +661,8 @@ impl PoolTypeTrait for UniswapV3Pool {
 }
 
 /// Fetches pool data for a V3 pool
-pub async fn fetch_v3_pool<P: Provider + Send + Sync>(
-    provider: &Arc<P>,
+pub async fn fetch_v3_pool(
+    provider: Arc<DynProvider>,
     pool_address: Address,
     block_number: BlockId,
     token_registry: &Arc<RwLock<TokenRegistry>>,
@@ -768,9 +769,9 @@ pub async fn fetch_v3_pool<P: Provider + Send + Sync>(
 
     // Create token objects (you'll need to fetch token details)
     let (token0, _) =
-        get_or_fetch_token(token_registry, provider, token0, multicall_address).await?;
+        get_or_fetch_token(token_registry, provider.clone(), token0, multicall_address).await?;
     let (token1, _) =
-        get_or_fetch_token(token_registry, provider, token1, multicall_address).await?;
+        get_or_fetch_token(token_registry, provider.clone(), token1, multicall_address).await?;
 
     info!(
         "V3 Pool {:?}: Token0: {}, Token1: {}, Fee: {}, Factory: {}, Tick: {}, Liquidity: {}",
@@ -790,14 +791,16 @@ pub async fn fetch_v3_pool<P: Provider + Send + Sync>(
         v3_pool_type,
     );
 
-    if let Err(e) = fetch_v3_ticks(provider, &mut pool, block_number, multicall_address).await {
+    if let Err(e) =
+        fetch_v3_ticks(provider.clone(), &mut pool, block_number, multicall_address).await
+    {
         error!("Error fetching ticks for pool {}: {}", pool_address, e);
         return Err(e);
     }
 
     if pool.pool_type == V3PoolType::RamsesV2 {
         let ratio_conversion_factor =
-            calculate_ratio_conversion_factor(&pool, provider, block_number).await?;
+            calculate_ratio_conversion_factor(&pool, provider.clone(), block_number).await?;
         info!(
             "Ratio conversion factor: {}",
             ratio_conversion_factor.to::<U128>()
@@ -809,8 +812,8 @@ pub async fn fetch_v3_pool<P: Provider + Send + Sync>(
 }
 
 /// Fetches tick data for a V3 pool
-pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
-    provider: &Arc<P>,
+pub async fn fetch_v3_ticks(
+    provider: Arc<DynProvider>,
     pool: &mut UniswapV3Pool,
     block_number: BlockId,
     multicall_address: Address,
@@ -828,10 +831,10 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
 
             // Split word bitmap fetching into chunks
             let mut all_bitmaps = Vec::new();
-            let contract = IUniswapV3Pool::new(pool.address, provider);
+            let contract = IUniswapV3Pool::new(pool.address, provider.clone());
             for chunk in (min_word..=max_word).collect::<Vec<_>>().chunks(CHUNK_SIZE) {
                 let mut multicall =
-                    MulticallBuilder::new_dynamic(provider).address(multicall_address);
+                    MulticallBuilder::new_dynamic(provider.clone()).address(multicall_address);
                 for &word_pos in chunk {
                     word_pos_indices.push(word_pos);
                     multicall = multicall.add_dynamic(contract.tickBitmap(word_pos as i16));
@@ -858,7 +861,7 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
         }
         V3PoolType::AlgebraV3 => {
             // Algebra V3 approach: navigate through 3-level tree structure
-            let contract = AlgebraV3Pool::new(pool.address, provider);
+            let contract = AlgebraV3Pool::new(pool.address, provider.clone());
             // Step 1: Fetch the root of the tick tree
             let tick_tree_root: u32 = contract.tickTreeRoot().block(block_number).call().await?;
             if tick_tree_root == 0 {
@@ -877,7 +880,7 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
 
             // Step 3: Fetch second layer bitmaps
             let mut second_layer_multicall =
-                MulticallBuilder::new_dynamic(provider).address(multicall_address);
+                MulticallBuilder::new_dynamic(provider.clone()).address(multicall_address);
             for &second_layer_index in &second_layer_indices {
                 second_layer_multicall = second_layer_multicall
                     .add_dynamic(contract.tickTreeSecondLayer(second_layer_index));
@@ -909,7 +912,7 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
 
             // Step 5: Fetch tick table bitmaps (leaf layer)
             let mut tick_table_multicall =
-                MulticallBuilder::new_dynamic(provider).address(multicall_address);
+                MulticallBuilder::new_dynamic(provider.clone()).address(multicall_address);
             for &tick_table_index in &tick_table_indices {
                 tick_table_multicall =
                     tick_table_multicall.add_dynamic(contract.tickTable(tick_table_index));
@@ -948,10 +951,10 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
 
             // Split word bitmap fetching into chunks
             let mut all_bitmaps = Vec::new();
-            let contract = AlgebraTwoSideFee::new(pool.address, provider);
+            let contract = AlgebraTwoSideFee::new(pool.address, provider.clone());
             for chunk in (min_word..=max_word).collect::<Vec<_>>().chunks(CHUNK_SIZE) {
                 let mut multicall =
-                    MulticallBuilder::new_dynamic(provider).address(multicall_address);
+                    MulticallBuilder::new_dynamic(provider.clone()).address(multicall_address);
                 for &word_pos in chunk {
                     word_pos_indices.push(word_pos);
                     multicall = multicall.add_dynamic(contract.tickTable(word_pos as i16));
@@ -982,10 +985,10 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
     let mut all_ticks: BTreeMap<i32, Tick> = BTreeMap::new();
     match pool.pool_type {
         V3PoolType::UniswapV3 | V3PoolType::RamsesV2 | V3PoolType::PancakeV3 => {
-            let contract = IUniswapV3Pool::new(pool.address, provider);
+            let contract = IUniswapV3Pool::new(pool.address, provider.clone());
             for chunk in tick_indices.chunks(CHUNK_SIZE) {
                 let mut multicall =
-                    MulticallBuilder::new_dynamic(provider).address(multicall_address);
+                    MulticallBuilder::new_dynamic(provider.clone()).address(multicall_address);
                 for &tick_index in chunk {
                     multicall = multicall.add_dynamic(
                         contract.ticks(Signed::<24, 1>::try_from(tick_index).unwrap()),
@@ -1006,10 +1009,10 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
         V3PoolType::AlgebraV3
         | V3PoolType::AlgebraTwoSideFee
         | V3PoolType::AlgebraPoolFeeInState => {
-            let contract = AlgebraV3Pool::new(pool.address, provider);
+            let contract = AlgebraV3Pool::new(pool.address, provider.clone());
             for chunk in tick_indices.chunks(CHUNK_SIZE) {
                 let mut multicall =
-                    MulticallBuilder::new_dynamic(provider).address(multicall_address);
+                    MulticallBuilder::new_dynamic(provider.clone()).address(multicall_address);
                 for &tick_index in chunk {
                     multicall = multicall.add_dynamic(
                         contract.ticks(Signed::<24, 1>::try_from(tick_index).unwrap()),
@@ -1035,9 +1038,9 @@ pub async fn fetch_v3_ticks<P: Provider + Send + Sync>(
     Ok(())
 }
 
-pub async fn calculate_ratio_conversion_factor<P: Provider + Send + Sync>(
+pub async fn calculate_ratio_conversion_factor(
     pool_v3: &UniswapV3Pool,
-    provider: &Arc<P>,
+    provider: Arc<DynProvider>,
     block_number: BlockId,
 ) -> Result<U256> {
     let quoter = get_ramses_quoter(pool_v3.factory);

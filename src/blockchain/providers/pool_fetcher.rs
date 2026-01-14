@@ -6,14 +6,14 @@ use crate::models::pool::PoolType;
 use crate::models::token::TokenRegistry;
 use alloy::eips::BlockId;
 use alloy::primitives::Address;
-use alloy::providers::Provider;
+use alloy::providers::{DynProvider, Provider};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub async fn identify_and_fetch_pool<P: Provider + Send + Sync>(
-    provider: &Arc<P>,
+pub async fn identify_and_fetch_pool(
+    provider: Arc<DynProvider>,
     pool_address: Address,
     block_number: BlockId,
     token_registry: &Arc<RwLock<TokenRegistry>>,
@@ -21,11 +21,11 @@ pub async fn identify_and_fetch_pool<P: Provider + Send + Sync>(
     factory_to_fee: &HashMap<String, u64>,
     aero_factory_addresses: &Vec<Address>,
 ) -> Result<Box<dyn PoolInterface>> {
-    let pool_type = identify_pool_type(provider, pool_address).await?;
+    let pool_type = identify_pool_type(provider.clone(), pool_address).await?;
     match pool_type {
         PoolType::UniswapV2 => {
             let pool = fetch_v2_pool(
-                provider,
+                provider.clone(),
                 pool_address,
                 block_number,
                 token_registry,
@@ -51,8 +51,8 @@ pub async fn identify_and_fetch_pool<P: Provider + Send + Sync>(
 }
 
 /// Identifies the type o
-pub async fn identify_pool_type<P: Provider + Send + Sync>(
-    provider: &Arc<P>,
+pub async fn identify_pool_type(
+    provider: Arc<DynProvider>,
     pool_address: Address,
 ) -> Result<PoolType> {
     // Try to read the fee() function which exists in V3 but not V2
@@ -67,8 +67,8 @@ pub async fn identify_pool_type<P: Provider + Send + Sync>(
 }
 
 /// Main function to fetch pool data
-pub async fn fetch_pool<P: Provider + Send + Sync>(
-    provider: &Arc<P>,
+pub async fn fetch_pool(
+    provider: Arc<DynProvider>,
     pool_address: Address,
     block_number: BlockId,
     pool_type: PoolType,

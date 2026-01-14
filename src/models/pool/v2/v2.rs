@@ -11,6 +11,7 @@ use crate::{
     services::Database,
     PoolType,
 };
+use alloy::providers::DynProvider;
 use alloy::{
     eips::BlockId,
     primitives::U160,
@@ -509,8 +510,8 @@ impl PoolTypeTrait for UniswapV2Pool {
 }
 
 /// Fetches pool data for a V2 pool
-pub async fn fetch_v2_pool<P: Provider + Send + Sync>(
-    provider: &Arc<P>,
+pub async fn fetch_v2_pool(
+    provider: Arc<DynProvider>,
     pool_address: Address,
     block_number: BlockId,
     token_registry: &Arc<RwLock<TokenRegistry>>,
@@ -597,7 +598,7 @@ pub async fn fetch_v2_pool<P: Provider + Send + Sync>(
                 Ok(fee) => fee,
                 Err(_) => {
                     let fee = if let Some(fee) = get_v2_fee_from_factory(
-                        provider,
+                        provider.clone(),
                         factory,
                         pool_address,
                         is_stable,
@@ -609,8 +610,8 @@ pub async fn fetch_v2_pool<P: Provider + Send + Sync>(
                         fee
                     } else {
                         // If factory is not in factory to fee map try get pool from aero map
-                        let mut multicall =
-                            MulticallBuilder::new_dynamic(provider).address(multicall_address);
+                        let mut multicall = MulticallBuilder::new_dynamic(provider.clone())
+                            .address(multicall_address);
                         for factory in aero_factories {
                             let factory_instance = IVeloPoolFactory::new(*factory, &provider);
                             multicall = multicall.add_dynamic(factory_instance.getPair(
@@ -626,7 +627,7 @@ pub async fn fetch_v2_pool<P: Provider + Send + Sync>(
                             if let Ok(pool_address_result) = result {
                                 if pool_address_result.eq(&pool_address) {
                                     if let Some(fee) = get_v2_fee_from_factory(
-                                        provider,
+                                        provider.clone(),
                                         *aero_factories.get(i).unwrap(),
                                         pool_address,
                                         is_stable,
@@ -669,10 +670,20 @@ pub async fn fetch_v2_pool<P: Provider + Send + Sync>(
     };
 
     // Create token objects (you'll need to fetch token details)
-    let (token0, decimals0) =
-        get_or_fetch_token(token_registry, provider, token0_address, multicall_address).await?;
-    let (token1, decimals1) =
-        get_or_fetch_token(token_registry, provider, token1_address, multicall_address).await?;
+    let (token0, decimals0) = get_or_fetch_token(
+        token_registry,
+        provider.clone(),
+        token0_address,
+        multicall_address,
+    )
+    .await?;
+    let (token1, decimals1) = get_or_fetch_token(
+        token_registry,
+        provider.clone(),
+        token1_address,
+        multicall_address,
+    )
+    .await?;
     // Create and return V2 pool
     info!(
         "{} Token0: {}, Token1: {}, Fee: {}, Factory: {}",
@@ -695,8 +706,8 @@ pub async fn fetch_v2_pool<P: Provider + Send + Sync>(
     ))
 }
 
-async fn get_v2_fee_from_factory<P: Provider + Send + Sync>(
-    provider: &Arc<P>,
+async fn get_v2_fee_from_factory(
+    provider: Arc<DynProvider>,
     factory: Address,
     pool_address: Address,
     is_stable: bool,

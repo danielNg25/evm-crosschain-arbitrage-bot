@@ -136,8 +136,8 @@ impl TelegramService {
 pub fn escape_markdownv2(text: &str) -> String {
     text.chars()
         .map(|c| match c {
-            '_' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '=' | '|' | '{'
-            | '}' | '.' | '!' => format!("\\{}", c),
+            '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '=' | '|' | '{' | '}'
+            | '.' | '!' => format!("\\{}", c),
             _ => c.to_string(),
         })
         .collect()

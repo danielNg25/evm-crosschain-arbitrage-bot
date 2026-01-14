@@ -1,4 +1,4 @@
-use alloy::providers::Provider;
+use alloy::providers::{DynProvider, Provider};
 use anyhow::Result;
 use log::{error, info};
 use std::sync::Arc;
@@ -12,14 +12,14 @@ pub struct GasInfo {
     pub last_updated: std::time::Instant,
 }
 
-pub struct NetworkConfigurator<P: Provider + Send + Sync + 'static> {
-    provider: Arc<P>,
+pub struct NetworkConfigurator {
+    provider: Arc<DynProvider>,
     update_interval: Duration,
     pub gas_info: Arc<RwLock<GasInfo>>,
 }
 
-impl<P: Provider + Send + Sync + 'static> NetworkConfigurator<P> {
-    pub fn new(provider: Arc<P>, update_interval: Duration) -> Self {
+impl NetworkConfigurator {
+    pub fn new(provider: Arc<DynProvider>, update_interval: Duration) -> Self {
         Self {
             provider,
             update_interval,
@@ -55,7 +55,10 @@ impl<P: Provider + Send + Sync + 'static> NetworkConfigurator<P> {
         Ok(())
     }
 
-    async fn update_gas_info(gas_info: &Arc<RwLock<GasInfo>>, provider: &Arc<P>) -> Result<()> {
+    async fn update_gas_info(
+        gas_info: &Arc<RwLock<GasInfo>>,
+        provider: &Arc<DynProvider>,
+    ) -> Result<()> {
         let gas_price = provider.get_gas_price().await?;
         let mut info = gas_info.write().await;
         info.gas_price = gas_price;

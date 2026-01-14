@@ -1,11 +1,12 @@
 use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{Address, FixedBytes};
-use alloy::providers::Provider;
+use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use anyhow::Result;
 use std::sync::Arc;
-pub async fn fetch_events<P: Provider + Send + Sync>(
-    provider: &Arc<P>,
+
+pub async fn fetch_events(
+    provider: Arc<DynProvider>,
     addresses: Vec<Address>,
     topics: Vec<FixedBytes<32>>,
     from_block: BlockNumberOrTag,

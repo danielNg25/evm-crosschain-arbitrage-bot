@@ -1,6 +1,6 @@
 use alloy::primitives::utils::{format_units, parse_units};
 use alloy::primitives::{Address, U256};
-use alloy::providers::Provider;
+use alloy::providers::{DynProvider, Provider};
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -67,10 +67,7 @@ impl Token {
             .map_err(|e| anyhow!("Failed to parse float: {}", e))
     }
 
-    pub async fn from_address<P: Provider + Send + Sync>(
-        provider: Arc<P>,
-        address: Address,
-    ) -> Result<Self> {
+    pub async fn from_address(provider: Arc<DynProvider>, address: Address) -> Result<Self> {
         let token_instance = IERC20::new(address, &provider);
         let multicall = provider
             .multicall()

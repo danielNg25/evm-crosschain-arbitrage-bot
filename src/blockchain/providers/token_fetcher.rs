@@ -1,15 +1,15 @@
 use crate::blockchain::IERC20;
 use crate::models::token::{Token, TokenRegistry};
 use alloy::primitives::Address;
-use alloy::providers::Provider;
+use alloy::providers::{DynProvider, Provider};
 
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Fetches token data for an ERC20 token
-pub async fn fetch_token_data<P: Provider + Send + Sync>(
-    provider: &Arc<P>,
+pub async fn fetch_token_data(
+    provider: Arc<DynProvider>,
     token_address: Address,
     network_id: u64,
     multicall_address: Address,
@@ -34,9 +34,9 @@ pub async fn fetch_token_data<P: Provider + Send + Sync>(
     ))
 }
 
-pub async fn get_or_fetch_token<P: Provider + Send + Sync>(
+pub async fn get_or_fetch_token(
     token_registry: &Arc<RwLock<TokenRegistry>>,
-    provider: &Arc<P>,
+    provider: Arc<DynProvider>,
     address: Address,
     multicall_address: Address,
 ) -> Result<(Address, u8)> {

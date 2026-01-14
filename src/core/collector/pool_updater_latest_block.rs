@@ -20,17 +20,17 @@ use tokio::sync::RwLock;
 use super::PoolChange;
 
 pub struct PoolUpdaterLatestBlock {
-    provider: Arc<DynProvider>,
+    provider: Arc<RwLock<Arc<DynProvider>>>,
     pool_registry: Arc<RwLock<PoolRegistry>>,
     token_registry: Arc<RwLock<TokenRegistry>>,
     pending_new_pools: Arc<RwLock<Vec<Address>>>,
     metrics: Arc<RwLock<Metrics>>,
-    pub max_blocks_per_batch: u64,
+    pub max_blocks_per_batch: Arc<RwLock<u64>>,
     swap_event_tx: mpsc::Sender<PoolChange>,
     topics: Arc<Vec<Topic>>,
     profitable_topics: Arc<HashSet<Topic>>,
-    pub multicall_address: Address,
-    pub wait_time_fetch: u64,
+    pub multicall_address: Arc<RwLock<Address>>,
+    pub wait_time_fetch: Arc<RwLock<u64>>,
     chain_id: u64,
     error_loggers: Vec<Arc<dyn ErrorLogger>>,
 }
@@ -80,12 +80,12 @@ impl PoolUpdaterLatestBlock {
         });
 
         Self {
-            provider,
+            provider: Arc::new(RwLock::new(provider.clone())),
             pool_registry: pool_registry.clone(),
             token_registry: token_registry.clone(),
             pending_new_pools: Arc::new(RwLock::new(Vec::new())),
             metrics: metrics.clone(),
-            max_blocks_per_batch,
+            max_blocks_per_batch: Arc::new(RwLock::new(max_blocks_per_batch)),
             swap_event_tx,
             topics: Arc::new(pool_registry.read().await.get_topics().await.clone()),
             profitable_topics: Arc::new(
@@ -96,8 +96,8 @@ impl PoolUpdaterLatestBlock {
                     .await
                     .clone(),
             ),
-            multicall_address,
-            wait_time_fetch,
+            multicall_address: Arc::new(RwLock::new(multicall_address)),
+            wait_time_fetch: Arc::new(RwLock::new(wait_time_fetch)),
             chain_id,
             error_loggers,
         }
@@ -115,11 +115,11 @@ impl PoolUpdaterLatestBlock {
 
         for pool in initial_pools {
             let pool = identify_and_fetch_pool(
-                &self.provider,
+                Arc::clone(&*self.provider.read().await),
                 pool,
                 BlockId::Number(BlockNumberOrTag::Number(initial_block)),
                 &self.token_registry,
-                self.multicall_address,
+                *self.multicall_address.read().await,
                 &factory_to_fee,
                 &aero_factory_addresses,
             )
@@ -144,11 +144,11 @@ impl PoolUpdaterLatestBlock {
             while self.pending_new_pools.read().await.len() > 0 {
                 let pool_address = self.pending_new_pools.write().await.pop().unwrap();
                 if let Ok(pool) = identify_and_fetch_pool(
-                    &self.provider,
+                    Arc::clone(&*self.provider.read().await),
                     pool_address,
                     BlockId::Number(BlockNumberOrTag::Number(last_processed_block)),
                     &self.token_registry,
-                    self.multicall_address,
+                    *self.multicall_address.read().await,
                     &self.pool_registry.read().await.get_factory_to_fee().await,
                     &self
                         .pool_registry
@@ -173,11 +173,12 @@ impl PoolUpdaterLatestBlock {
                     continue;
                 }
             }
+            let wait_time_fetch = *self.wait_time_fetch.read().await;
             // Get latest block number with retry logic
-            let mut backoff = Duration::from_millis(50);
-            let max_backoff = Duration::from_millis(500);
+            let mut backoff = Duration::from_millis(wait_time_fetch);
+            let max_backoff = Duration::from_millis(wait_time_fetch * 10);
             let latest_block = loop {
-                match self.provider.get_block_number().await {
+                match (*self.provider.read().await).get_block_number().await {
                     Ok(block) => {
                         break block;
                     }
@@ -188,6 +189,16 @@ impl PoolUpdaterLatestBlock {
                             backoff.as_secs(),
                             e
                         );
+                        for logger in self.error_loggers.iter() {
+                            let logger = Arc::clone(logger);
+                            let error_msg = e.to_string();
+                            let chain_id = self.chain_id;
+                            tokio::spawn(async move {
+                                if let Err(e) = logger.log_error(chain_id, &error_msg).await {
+                                    error!("Error logging error: {:?}", e);
+                                }
+                            });
+                        }
                         tokio::time::sleep(backoff).await;
                         backoff = std::cmp::min(backoff * 2, max_backoff);
                     }
@@ -201,13 +212,15 @@ impl PoolUpdaterLatestBlock {
                     "Waiting for new blocks. Current: {}, Latest: {}",
                     current_block, latest_block
                 );
-                tokio::time::sleep(Duration::from_millis(self.wait_time_fetch)).await;
+                tokio::time::sleep(Duration::from_millis(wait_time_fetch)).await;
                 continue;
             }
 
             while current_block <= latest_block {
+                let max_blocks_per_batch = *self.max_blocks_per_batch.read().await;
+                let wait_time_fetch = *self.wait_time_fetch.read().await;
                 let batch_end =
-                    std::cmp::min(current_block + self.max_blocks_per_batch - 1, latest_block);
+                    std::cmp::min(current_block + max_blocks_per_batch - 1, latest_block);
                 info!(
                     "CHAIN ID: {} | Processing blocks: {} - {}",
                     self.chain_id, current_block, batch_end
@@ -215,7 +228,7 @@ impl PoolUpdaterLatestBlock {
 
                 // Process pools for confirmed blocks
                 match proccess_pools(
-                    &self.provider,
+                    Arc::clone(&*self.provider.read().await),
                     &self.pool_registry,
                     &self.metrics,
                     &self.swap_event_tx,
@@ -225,7 +238,7 @@ impl PoolUpdaterLatestBlock {
                     self.topics.clone(),
                     self.profitable_topics.clone(),
                     self.chain_id,
-                    self.wait_time_fetch,
+                    wait_time_fetch,
                     self.error_loggers.clone(),
                 )
                 .await
@@ -241,39 +254,39 @@ impl PoolUpdaterLatestBlock {
                             "CHAIN ID: {} | Successfully processed blocks: {} - {}",
                             self.chain_id, current_block, batch_end
                         );
+
+                        current_block = batch_end + 1;
                     }
                     Err(e) => {
                         error!(
-                            "CHAIN ID: {} | Error processing blocks {} - {}: {}",
+                            "CHAIN ID: {} | Breaking loop due to error processing blocks {} - {}: {}",
                             self.chain_id, current_block, batch_end, e
                         );
                         // Don't update last_processed_block on error
                         break;
                     }
                 }
-
-                current_block = batch_end + 1;
             }
 
             // Add a small delay between iterations to prevent tight loops
-            tokio::time::sleep(Duration::from_millis(self.wait_time_fetch)).await;
+            tokio::time::sleep(Duration::from_millis(wait_time_fetch)).await;
         }
     }
 
-    pub async fn set_provider(&mut self, provider: DynProvider) {
-        self.provider = Arc::new(provider);
+    pub async fn set_provider(&self, provider: DynProvider) {
+        *self.provider.write().await = Arc::new(provider);
     }
 
-    pub async fn set_multicall_address(&mut self, multicall_address: Address) {
-        self.multicall_address = multicall_address;
+    pub async fn set_multicall_address(&self, multicall_address: Address) {
+        *self.multicall_address.write().await = multicall_address;
     }
 
-    pub async fn set_wait_time_fetch(&mut self, wait_time_fetch: u64) {
-        self.wait_time_fetch = wait_time_fetch;
+    pub async fn set_wait_time_fetch(&self, wait_time_fetch: u64) {
+        *self.wait_time_fetch.write().await = wait_time_fetch;
     }
 
-    pub async fn set_max_blocks_per_batch(&mut self, max_blocks_per_batch: u64) {
-        self.max_blocks_per_batch = max_blocks_per_batch;
+    pub async fn set_max_blocks_per_batch(&self, max_blocks_per_batch: u64) {
+        *self.max_blocks_per_batch.write().await = max_blocks_per_batch;
     }
 
     pub async fn add_pending_new_pools(&self, new_pools: Vec<Address>) -> Result<()> {
@@ -313,8 +326,8 @@ impl PoolUpdaterLatestBlock {
     }
 }
 
-async fn proccess_pools<P: Provider + Send + Sync + 'static>(
-    provider: &Arc<P>,
+async fn proccess_pools(
+    provider: Arc<DynProvider>,
     pool_registry: &Arc<RwLock<PoolRegistry>>,
     metrics: &Arc<RwLock<Metrics>>,
     swap_event_tx: &mpsc::Sender<PoolChange>,
@@ -338,8 +351,9 @@ async fn proccess_pools<P: Provider + Send + Sync + 'static>(
 
     let topics = topics.clone().to_vec();
     loop {
+        let provider_clone = provider.clone();
         match fetch_events(
-            provider,
+            provider_clone,
             addresses.clone(),
             topics.clone(),
             from_block,
@@ -421,6 +435,13 @@ async fn proccess_pools<P: Provider + Send + Sync + 'static>(
                             error!("Error logging error: {:?}", e);
                         }
                     });
+                }
+                if backoff == max_backoff {
+                    error!(
+                        "CHAIN ID: {} | Breaking loop due to error fetching events, max backoff reached: {}",
+                        chain_id, error_msg
+                    );
+                    break;
                 }
                 tokio::time::sleep(backoff).await;
                 backoff = std::cmp::min(backoff * 2, max_backoff);
