@@ -139,7 +139,14 @@ impl OpportunityLogger for TelegramLogger {
 
 #[async_trait::async_trait]
 impl ErrorLogger for TelegramLogger {
-    async fn log_error(&self, chain_id: u64, error: &str) -> Result<()> {
+    async fn log_error(&self, error: &str) -> Result<()> {
+        info!("Logging error: {}", error);
+        self.service
+            .send_markdown_message_to_thread(&format!("🔴 _{}_", error), self.error_thread_id)
+            .await
+    }
+
+    async fn log_error_with_chain_id(&self, chain_id: u64, error: &str) -> Result<()> {
         if self.last_log_time.lock().await.elapsed()
             < Duration::from_secs(self.error_log_interval_secs)
         {

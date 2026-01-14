@@ -103,6 +103,15 @@ impl NetworkCollector {
                             )
                             .await
                             {
+                                for logger in error_loggers.lock().await.iter() {
+                                    let logger = Arc::clone(logger);
+                                    let error_msg = e.to_string();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = logger.log_error(&error_msg).await {
+                                            error!("Error logging error: {:?}", e);
+                                        }
+                                    });
+                                }
                                 error!("Failed to handle networks update: {}", e);
                             } else {
                                 // Update timestamp after successful sync
@@ -120,9 +129,23 @@ impl NetworkCollector {
                     Ok(pools) => {
                         if !pools.is_empty() {
                             info!("Fetched {} new/updated pools from MongoDB", pools.len());
-                            Self::handle_pools_update(pools, &network_registries).await;
-                            // Update timestamp after successful sync
-                            last_pool_sync = Some(Utc::now().timestamp() as u64);
+                            if let Err(e) =
+                                Self::handle_pools_update(pools, &network_registries).await
+                            {
+                                for logger in error_loggers.lock().await.iter() {
+                                    let logger = Arc::clone(logger);
+                                    let error_msg = e.to_string();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = logger.log_error(&error_msg).await {
+                                            error!("Error logging error: {:?}", e);
+                                        }
+                                    });
+                                }
+                                error!("Failed to handle pools update: {}", e);
+                            } else {
+                                // Update timestamp after successful sync
+                                last_pool_sync = Some(Utc::now().timestamp() as u64);
+                            }
                         }
                     }
                     Err(e) => {
@@ -135,9 +158,23 @@ impl NetworkCollector {
                     Ok(paths) => {
                         if !paths.is_empty() {
                             info!("Fetched {} new/updated paths from MongoDB", paths.len());
-                            Self::handle_paths_update(paths, &network_registries).await;
-                            // Update timestamp after successful sync
-                            last_path_sync = Some(Utc::now().timestamp() as u64);
+                            if let Err(e) =
+                                Self::handle_paths_update(paths, &network_registries).await
+                            {
+                                for logger in error_loggers.lock().await.iter() {
+                                    let logger = Arc::clone(logger);
+                                    let error_msg = e.to_string();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = logger.log_error(&error_msg).await {
+                                            error!("Error logging error: {:?}", e);
+                                        }
+                                    });
+                                }
+                                error!("Failed to handle paths update: {}", e);
+                            } else {
+                                // Update timestamp after successful sync
+                                last_path_sync = Some(Utc::now().timestamp() as u64);
+                            }
                         }
                     }
                     Err(e) => {
@@ -222,20 +259,34 @@ impl NetworkCollector {
                 .contains_key(&network.chain_id)
             {
                 let provider = create_provider(network.rpcs.clone());
+                let chain_id = provider.get_chain_id().await.unwrap();
+                if chain_id != network_id {
+                    error!("Chain ID mismatch for network {}", network_id);
+                    return Err(anyhow::anyhow!(
+                        "Chain ID mismatch for network {}",
+                        network_id
+                    ));
+                }
                 let latest_block = provider.get_block_number().await.unwrap();
 
                 let pool_registry =
                     Arc::new(RwLock::new(PoolRegistry::new(provider.clone(), network_id)));
                 if let Some(aero_factory_addresses) = network.aero_factory_addresses.clone() {
+                    let aero_factory_addresses_parsed: Vec<Address> = aero_factory_addresses
+                        .into_iter()
+                        .map(|a| {
+                            Address::from_str(&a).map_err(|e| {
+                                anyhow::anyhow!("Failed to parse address '{}': {}", a, e)
+                            })
+                        })
+                        .collect::<Result<Vec<Address>, _>>()
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to parse aero factory addresses: {}", e)
+                        })?;
                     pool_registry
                         .read()
                         .await
-                        .set_aero_factory_addresses(
-                            aero_factory_addresses
-                                .into_iter()
-                                .map(|a| Address::from_str(&a).unwrap())
-                                .collect(),
-                        )
+                        .set_aero_factory_addresses(aero_factory_addresses_parsed)
                         .await;
                 }
 
@@ -253,7 +304,13 @@ impl NetworkCollector {
                     Arc::new(RwLock::new(PriceUpdater::new(network.name, vec![]).await));
 
                 let profit_token_registry = Arc::new(RwLock::new(ProfitTokenRegistry::new(
-                    network.wrap_native.parse().unwrap(),
+                    Address::from_str(&network.wrap_native).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to parse wrap native '{}': {}",
+                            network.wrap_native,
+                            e
+                        )
+                    })?,
                     token_registry.clone(),
                     price_updater.clone(),
                     network.min_profit_usd,
@@ -304,9 +361,24 @@ impl NetworkCollector {
                 let network_registry = network_registries
                     .get_network_registry(network_id)
                     .await
-                    .unwrap();
+                    .ok_or_else(|| {
+                        error!("Network registry not found for network {}", network_id);
+                        anyhow::anyhow!("Network registry not found for network {}", network_id)
+                    })?;
 
-                network_registry.write().await.update_network(network).await;
+                let result = network_registry.write().await.update_network(network).await;
+                if let Err(e) = result {
+                    for logger in error_loggers.lock().await.iter() {
+                        let logger = Arc::clone(logger);
+                        let error_msg = e.to_string();
+                        tokio::spawn(async move {
+                            if let Err(e) = logger.log_error(&error_msg).await {
+                                error!("Error logging error: {:?}", e);
+                            }
+                        });
+                    }
+                    error!("Failed to update network: {}", e);
+                }
             }
         }
         info!("Handled {} networks update", network_len);
@@ -317,7 +389,7 @@ impl NetworkCollector {
     async fn handle_pools_update(
         pools: Vec<Pool>,
         network_registries: &Arc<MultichainNetworkRegistry>,
-    ) {
+    ) -> Result<()> {
         let mut network_to_pools = HashMap::new();
         for pool in pools {
             network_to_pools
@@ -331,10 +403,14 @@ impl NetworkCollector {
                 pools.len(),
                 network_id
             );
-            network_registries
+            let network_registry = network_registries
                 .get_network_registry(network_id)
                 .await
-                .unwrap()
+                .ok_or_else(|| {
+                    error!("Network registry not found for network {}", network_id);
+                    anyhow::anyhow!("Network registry not found for network {}", network_id)
+                })?;
+            network_registry
                 .read()
                 .await
                 .pool_updater
@@ -343,24 +419,35 @@ impl NetworkCollector {
                 .add_pending_new_pools(
                     pools
                         .into_iter()
-                        .map(|p| p.address.parse().unwrap())
-                        .collect(),
+                        .map(|p| {
+                            Address::from_str(&p.address).map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to parse pool address '{}': {}",
+                                    p.address,
+                                    e
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| anyhow::anyhow!("Failed to parse pool addresses: {}", e))?,
                 )
-                .await
-                .unwrap();
+                .await?;
         }
+
+        Ok(())
     }
 
     /// Handle paths update - PLACEHOLDER for implementation
     async fn handle_paths_update(
         paths: Vec<Path>,
         network_registries: &Arc<MultichainNetworkRegistry>,
-    ) {
+    ) -> Result<()> {
         for path in paths {
             if let Err(e) = network_registries.set_paths(path.paths).await {
-                error!("Failed to set paths: {}", e);
+                return Err(e);
             }
         }
+        Ok(())
     }
 }
 

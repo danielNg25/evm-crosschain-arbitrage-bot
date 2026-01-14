@@ -62,36 +62,49 @@ impl NetworkRegistry {
         }
     }
 
-    pub async fn update_network(&mut self, network: Network) {
+    pub async fn update_network(&mut self, network: Network) -> Result<()> {
         self.update_network_name(network.name.clone()).await;
 
         self.update_rpcs(network.rpcs.clone()).await;
 
-        self.update_wrap_native(Address::from_str(&network.wrap_native).unwrap())
-            .await;
+        let wrap_native = Address::from_str(&network.wrap_native).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to parse wrap native '{}': {}",
+                network.wrap_native,
+                e
+            )
+        })?;
+        self.update_wrap_native(wrap_native).await;
 
         self.update_min_profit_usd(network.min_profit_usd).await;
 
+        // Parse aero factory addresses with error handling
+        let aero_factory_addresses_parsed: Vec<Address> = network
+            .aero_factory_addresses
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| {
+                Address::from_str(&a).map_err(|e| {
+                    anyhow::anyhow!("Failed to parse aero factory address '{}': {}", a, e)
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         self.update_factory(
             network.v2_factory_to_fee.clone().unwrap_or_default(),
-            network
-                .aero_factory_addresses
-                .clone()
-                .unwrap_or_default()
-                .iter()
-                .map(|a| Address::from_str(a).unwrap())
-                .collect(),
+            aero_factory_addresses_parsed,
         )
         .await;
 
-        self.update_multicall_address(
-            network
-                .multicall_address
-                .clone()
-                .map(|s| Address::from_str(&s).unwrap())
-                .unwrap_or(MULTICALL3_ADDRESS),
-        )
-        .await;
+        // Parse multicall address with error handling
+        let multicall_address = match network.multicall_address.clone() {
+            Some(s) => Address::from_str(&s)
+                .map_err(|e| anyhow::anyhow!("Failed to parse multicall address '{}': {}", s, e))?,
+            None => MULTICALL3_ADDRESS,
+        };
+
+        self.update_multicall_address(multicall_address).await;
 
         self.update_wait_time_fetch(network.wait_time_fetch).await;
 
@@ -99,6 +112,7 @@ impl NetworkRegistry {
             .await;
 
         info!("Updated network {}", self.network_name);
+        Ok(())
     }
 
     pub async fn update_network_name(&mut self, network_name: String) {
@@ -299,9 +313,14 @@ impl MultichainNetworkRegistry {
     }
 
     pub async fn get_network_info(&self, chain_id: u64) -> Option<(u64, String)> {
-        let network_registry = self.get_network_registry(chain_id).await.unwrap();
-        let guard = network_registry.read().await;
-        Some((guard.network_id, guard.network_name.clone()))
+        if let Some(network_registry) = self.get_network_registry(chain_id).await {
+            Some((
+                network_registry.read().await.network_id,
+                network_registry.read().await.network_name.clone(),
+            ))
+        } else {
+            None
+        }
     }
 
     pub async fn get_network_registry(
@@ -315,9 +334,11 @@ impl MultichainNetworkRegistry {
 
     // PATH
     pub async fn get_path_registry(&self, chain_id: u64) -> Option<Arc<RwLock<PathRegistry>>> {
-        let network_registry = self.get_network_registry(chain_id).await.unwrap();
-        let guard = network_registry.read().await;
-        Some(guard.path_registry.clone())
+        if let Some(network_registry) = self.get_network_registry(chain_id).await {
+            Some(network_registry.read().await.path_registry.clone())
+        } else {
+            None
+        }
     }
 
     pub async fn remove_network_registry(&mut self, chain_id: u64) -> Result<()> {
@@ -363,7 +384,9 @@ impl MultichainNetworkRegistry {
                     .unwrap()
                     .push(single_path.clone());
             }
-            let path_registry = self.get_path_registry(path.chain_id).await.unwrap();
+            let path_registry = self.get_path_registry(path.chain_id).await.ok_or_else(|| {
+                anyhow::anyhow!("Path registry not found for chain_id: {}", path.chain_id)
+            })?;
             // Filter out paths for the current chain_id - only include paths for other chains
             let other_paths: Vec<SingleChainPathsWithAnchorToken> = paths
                 .iter()
@@ -399,9 +422,11 @@ impl MultichainNetworkRegistry {
         SingleChainPathsWithAnchorToken,
         Vec<SingleChainPathsWithAnchorToken>,
     )> {
-        let path_registry = self.get_path_registry(chain_id).await.unwrap();
-        let guard = path_registry.read().await;
-        guard.get_paths_for_pool(pool).await
+        if let Some(path_registry) = self.get_path_registry(chain_id).await {
+            path_registry.read().await.get_paths_for_pool(pool).await
+        } else {
+            None
+        }
     }
 
     // POOL
@@ -464,7 +489,7 @@ impl MultichainNetworkRegistry {
         }
     }
 
-    pub async fn add_token(&self, chain_id: u64, token: Address) {
+    pub async fn add_token(&self, chain_id: u64, token: Address) -> Result<()> {
         let config = ProfitToken {
             address: token,
             min_profit: U256::ZERO,
@@ -472,12 +497,19 @@ impl MultichainNetworkRegistry {
             price: None,
             default_price: 1.0,
         };
-        let profit_token_registry = self.get_profit_token_registry(chain_id).await.unwrap();
-        profit_token_registry
-            .read()
-            .await
-            .add_token(token, config)
-            .await;
+        if let Some(profit_token_registry) = self.get_profit_token_registry(chain_id).await {
+            profit_token_registry
+                .read()
+                .await
+                .add_token(token, config)
+                .await;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "Profit token registry not found for chain_id: {}",
+                chain_id
+            ))
+        }
     }
 
     pub async fn get_amount_for_value(

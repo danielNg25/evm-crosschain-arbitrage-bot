@@ -194,7 +194,9 @@ impl PoolUpdaterLatestBlock {
                             let error_msg = e.to_string();
                             let chain_id = self.chain_id;
                             tokio::spawn(async move {
-                                if let Err(e) = logger.log_error(chain_id, &error_msg).await {
+                                if let Err(e) =
+                                    logger.log_error_with_chain_id(chain_id, &error_msg).await
+                                {
                                     error!("Error logging error: {:?}", e);
                                 }
                             });
@@ -431,7 +433,7 @@ async fn proccess_pools(
                     let logger = Arc::clone(logger);
                     let error_msg = error_msg.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = logger.log_error(chain_id, &error_msg).await {
+                        if let Err(e) = logger.log_error_with_chain_id(chain_id, &error_msg).await {
                             error!("Error logging error: {:?}", e);
                         }
                     });
