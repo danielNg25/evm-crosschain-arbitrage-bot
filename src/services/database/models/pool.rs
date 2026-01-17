@@ -10,6 +10,7 @@ pub struct Pool {
     pub address: String,
     pub created_at: u64,
     pub updated_at: u64,
+    pub deleted_at: Option<u64>,
 }
 
 impl Pool {
@@ -20,6 +21,7 @@ impl Pool {
             address,
             created_at: Utc::now().timestamp() as u64,
             updated_at: Utc::now().timestamp() as u64,
+            deleted_at: None,
         }
     }
 }

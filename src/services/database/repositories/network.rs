@@ -23,7 +23,7 @@ impl NetworkRepository {
     pub async fn insert_if_not_exists(&self, network: Network) -> Result<u64> {
         let collection = self.client.collection::<Network>("networks");
 
-        // Check if network already exists
+        // Check if network already exists (including deleted ones for duplicate check)
         let filter = doc! { "chain_id": network.chain_id as i64 };
         let existing = collection.find_one(filter.clone()).await?;
 
@@ -45,7 +45,14 @@ impl NetworkRepository {
     /// Find a network by chain_id
     pub async fn find_by_chain_id(&self, chain_id: u64) -> Result<Option<Network>> {
         let collection = self.client.collection::<Network>("networks");
-        let filter = doc! { "chain_id": chain_id as i64 };
+        let filter = doc! {
+            "chain_id": chain_id as i64,
+            "$or": [
+                { "deleted_at": { "$exists": false } },
+                 { "deleted_at": null },
+                { "deleted_at": 0 }
+            ]
+        };
         let network = collection.find_one(filter).await?;
 
         Ok(network)
@@ -54,7 +61,14 @@ impl NetworkRepository {
     /// Find a network by name
     pub async fn find_by_name(&self, name: &str) -> Result<Option<Network>> {
         let collection = self.client.collection::<Network>("networks");
-        let filter = doc! { "name": name };
+        let filter = doc! {
+            "name": name,
+            "$or": [
+                { "deleted_at": { "$exists": false } },
+                 { "deleted_at": null },
+                { "deleted_at": 0 }
+            ]
+        };
         let network = collection.find_one(filter).await?;
 
         Ok(network)
@@ -150,7 +164,14 @@ impl NetworkRepository {
     /// Get all networks
     pub async fn find_all(&self) -> Result<Vec<Network>> {
         let collection = self.client.collection::<Network>("networks");
-        let mut cursor = collection.find(doc! {}).await?;
+        let filter = doc! {
+            "$or": [
+                { "deleted_at": { "$exists": false } },
+                 { "deleted_at": null },
+                { "deleted_at": 0 }
+            ]
+        };
+        let mut cursor = collection.find(filter).await?;
         let mut networks = Vec::new();
 
         while let Some(network) = cursor.try_next().await? {
@@ -166,9 +187,20 @@ impl NetworkRepository {
         let collection = self.client.collection::<Network>("networks");
         // Check both updated_at and created_at to catch new networks (created_at) and updated ones (updated_at)
         let filter = doc! {
-            "$or": [
-                { "updated_at": { "$gt": since_timestamp as i64 } },
-                { "created_at": { "$gt": since_timestamp as i64 } }
+            "$and": [
+                {
+                    "$or": [
+                        { "updated_at": { "$gt": since_timestamp as i64 } },
+                        { "created_at": { "$gt": since_timestamp as i64 } }
+                    ]
+                },
+                {
+                    "$or": [
+                        { "deleted_at": { "$exists": false } },
+                         { "deleted_at": null },
+                        { "deleted_at": 0 }
+                    ]
+                }
             ]
         };
         let mut cursor = collection.find(filter).await?;

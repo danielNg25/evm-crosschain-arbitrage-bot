@@ -143,7 +143,7 @@ impl PoolUpdaterLatestBlock {
 
             while self.pending_new_pools.read().await.len() > 0 {
                 let pool_address = self.pending_new_pools.write().await.pop().unwrap();
-                if let Ok(pool) = identify_and_fetch_pool(
+                match identify_and_fetch_pool(
                     Arc::clone(&*self.provider.read().await),
                     pool_address,
                     BlockId::Number(BlockNumberOrTag::Number(last_processed_block)),
@@ -159,18 +159,36 @@ impl PoolUpdaterLatestBlock {
                 )
                 .await
                 {
-                    self.pool_registry.read().await.add_pool(pool).await;
+                    Ok(pool) => {
+                        self.pool_registry.read().await.add_pool(pool).await;
 
-                    info!(
-                        "CHAIN ID: {} | Added pool {} to pool registry",
-                        self.chain_id, pool_address
-                    );
-                } else {
-                    error!(
-                        "CHAIN ID: {} | Error fetching pool {} from identify_and_fetch_pool",
-                        self.chain_id, pool_address
-                    );
-                    continue;
+                        info!(
+                            "CHAIN ID: {} | Added pool {} to pool registry",
+                            self.chain_id, pool_address
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            "CHAIN ID: {} | Error fetching pool {} from identify_and_fetch_pool: {}",
+                            self.chain_id, pool_address,e
+                        );
+                        for logger in self.error_loggers.iter() {
+                            let logger = Arc::clone(logger);
+                            let error_msg = format!(
+                                "Error fetching pool {} from identify_and_fetch_pool: {}",
+                                pool_address, e
+                            );
+                            let chain_id = self.chain_id;
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    logger.log_error_with_chain_id(chain_id, &error_msg).await
+                                {
+                                    error!("Error logging error: {:?}", e);
+                                }
+                            });
+                        }
+                        continue;
+                    }
                 }
             }
             let wait_time_fetch = *self.wait_time_fetch.read().await;
@@ -252,10 +270,6 @@ impl PoolUpdaterLatestBlock {
                             .await
                             .set_last_processed_block(batch_end)
                             .await;
-                        info!(
-                            "CHAIN ID: {} | Successfully processed blocks: {} - {}",
-                            self.chain_id, current_block, batch_end
-                        );
 
                         current_block = batch_end + 1;
                     }
@@ -366,13 +380,7 @@ async fn proccess_pools(
             Ok(events) => {
                 let received_at = Utc::now().timestamp_millis() as u64;
                 let mut swap_events = Vec::new();
-                info!(
-                    "CHAIN ID: {} | Processing {} events from {} to {}",
-                    chain_id,
-                    events.len(),
-                    from_block.as_number().unwrap(),
-                    to_block.as_number().unwrap()
-                );
+                let events_len = events.len();
                 for event in events {
                     if let Some(pool) = pool_registry.read().await.get_pool(&event.address()).await
                     {
@@ -391,7 +399,6 @@ async fn proccess_pools(
                         }
                     }
                 }
-
                 if is_latest_block && from_block == to_block {
                     for event in swap_events {
                         let tx_hash = event.transaction_hash.unwrap();
@@ -416,9 +423,16 @@ async fn proccess_pools(
                                 "CHAIN ID: {} | Error sending swap event to simulator: {}",
                                 chain_id, e
                             );
-                        }
+                        };
                     }
                 }
+                info!(
+                    "CHAIN ID: {} | Processed {} events from {} to {}",
+                    chain_id,
+                    events_len,
+                    from_block.as_number().unwrap(),
+                    to_block.as_number().unwrap()
+                );
                 break;
             }
             Err(e) => {

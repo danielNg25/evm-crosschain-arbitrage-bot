@@ -6,13 +6,14 @@ use crate::PoolInterface;
 use alloy::primitives::{Address, U256};
 use anyhow::Result;
 use dashmap::DashMap;
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock; // For parallel iteration
-
 const DEFAULT_MAX_AMOUNT: u128 = 100_000_000_000_000_000_000;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -30,6 +31,20 @@ pub struct TwoSidePath {
     pub target_chain: PoolPath,
     pub source_chain_id: u64,
     pub target_chain_id: u64,
+}
+
+impl fmt::Display for TwoSidePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TwoSidePath: anchor_token: {}\nsource_chain: {:?}\ntarget_chain: {:?}\nsource_chain_id: {}, target_chain_id: {}",
+            self.anchor_token,
+            self.source_chain,
+            self.target_chain,
+            self.source_chain_id,
+            self.target_chain_id
+        )
+    }
 }
 
 impl TwoSidePath {
@@ -124,6 +139,10 @@ impl CrossChainArbitrageProcessor {
     }
 
     pub async fn handle_pool_change(&self, pool_change: PoolChange) -> Result<()> {
+        info!(
+            "CHAIN ID: {} | Handling pool change for pool {}",
+            pool_change.chain_id, pool_change.pool_address
+        );
         let chain_id = pool_change.chain_id;
         let pool_address = pool_change.pool_address;
 
@@ -796,20 +815,20 @@ impl CrossChainArbitrageProcessor {
             let output_amount = if let Some(cached_value) = memo_cache.get(&(
                 path.target_chain_id,
                 pair.pool,
-                pair.token_out,
+                pair.token_in,
                 current_amount,
             )) {
                 *cached_value.value()
             } else {
                 let pool = backward_pool_snapshot.get(&pair.pool).unwrap();
                 let output_amount = pool
-                    .calculate_output(&pair.token_out, current_amount)
+                    .calculate_output(&pair.token_in, current_amount)
                     .unwrap();
                 memo_cache.insert(
                     (
                         path.target_chain_id,
                         pair.pool,
-                        pair.token_out,
+                        pair.token_in,
                         current_amount,
                     ),
                     output_amount,
@@ -832,14 +851,14 @@ impl CrossChainArbitrageProcessor {
                 source_chain_profit_token_registry
                     .read()
                     .await
-                    .to_human_amount_f64(&path.source_chain[0].token_in, amount_in)
+                    .to_human_amount_f64(&path.source_chain.first().unwrap().token_in, amount_in)
                     .await
                     .unwrap_or(0.0),
             );
         let amount_out_usd = target_chain_profit_token_registry
             .read()
             .await
-            .get_value(&path.target_chain[0].token_out, anchor_token_amount)
+            .get_value(&path.target_chain.last().unwrap().token_out, amount_out)
             .await
             .unwrap_or(
                 target_chain_profit_token_registry

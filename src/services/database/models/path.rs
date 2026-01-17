@@ -11,6 +11,7 @@ pub struct Path {
     pub paths: Vec<SingleChainPathsWithAnchorToken>,
     pub created_at: u64,
     pub updated_at: u64,
+    pub deleted_at: Option<u64>,
 }
 
 impl Path {
@@ -20,6 +21,7 @@ impl Path {
             paths,
             created_at: Utc::now().timestamp() as u64,
             updated_at: Utc::now().timestamp() as u64,
+            deleted_at: None,
         }
     }
 }

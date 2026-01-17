@@ -21,6 +21,7 @@ pub struct Network {
     pub wait_time_fetch: u64,
     pub created_at: u64,
     pub updated_at: u64,
+    pub deleted_at: Option<u64>,
 }
 
 impl Network {
@@ -54,6 +55,7 @@ impl Network {
             wait_time_fetch,
             created_at: Utc::now().timestamp() as u64,
             updated_at: Utc::now().timestamp() as u64,
+            deleted_at: None,
         }
     }
 }

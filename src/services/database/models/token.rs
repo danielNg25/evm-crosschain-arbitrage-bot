@@ -13,6 +13,7 @@ pub struct Token {
     pub decimals: Option<u8>,
     pub created_at: u64,
     pub updated_at: u64,
+    pub deleted_at: Option<u64>,
 }
 
 impl Token {
@@ -32,6 +33,7 @@ impl Token {
             decimals,
             created_at: Utc::now().timestamp() as u64,
             updated_at: Utc::now().timestamp() as u64,
+            deleted_at: None,
         }
     }
 }

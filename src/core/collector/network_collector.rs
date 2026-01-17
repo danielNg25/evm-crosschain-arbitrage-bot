@@ -129,8 +129,12 @@ impl NetworkCollector {
                     Ok(pools) => {
                         if !pools.is_empty() {
                             info!("Fetched {} new/updated pools from MongoDB", pools.len());
-                            if let Err(e) =
-                                Self::handle_pools_update(pools, &network_registries).await
+                            if let Err(e) = Self::handle_pools_update(
+                                pools,
+                                &network_registries,
+                                &error_loggers,
+                            )
+                            .await
                             {
                                 for logger in error_loggers.lock().await.iter() {
                                     let logger = Arc::clone(logger);
@@ -315,16 +319,17 @@ impl NetworkCollector {
                     price_updater.clone(),
                     network.min_profit_usd,
                 )));
+                let multicall_address: Address = network
+                    .multicall_address
+                    .as_ref()
+                    .and_then(|s| Address::from_str(s).ok())
+                    .unwrap_or(MULTICALL3_ADDRESS);
                 let pool_updater = Arc::new(RwLock::new(
                     PoolUpdaterLatestBlock::new(
                         Arc::new(provider.clone()),
                         pool_registry.clone(),
                         token_registry.clone(),
-                        network
-                            .multicall_address
-                            .as_ref()
-                            .map(|s| s.parse().expect("Invalid multicall_address"))
-                            .unwrap_or(MULTICALL3_ADDRESS),
+                        multicall_address,
                         metrics.clone(),
                         swap_event_tx.clone(),
                         latest_block,
@@ -358,13 +363,26 @@ impl NetworkCollector {
                 });
             } else {
                 // Checking changes in the network
-                let network_registry = network_registries
+                let network_registry = match network_registries
                     .get_network_registry(network_id)
                     .await
-                    .ok_or_else(|| {
+                {
+                    Some(network_registry) => network_registry,
+                    None => {
                         error!("Network registry not found for network {}", network_id);
-                        anyhow::anyhow!("Network registry not found for network {}", network_id)
-                    })?;
+                        for logger in error_loggers.lock().await.iter() {
+                            let logger = Arc::clone(logger);
+                            let error_msg =
+                                format!("Network registry not found for network {}", network_id);
+                            tokio::spawn(async move {
+                                if let Err(e) = logger.log_error(&error_msg).await {
+                                    error!("Error logging error: {:?}", e);
+                                }
+                            });
+                        }
+                        continue;
+                    }
+                };
 
                 let result = network_registry.write().await.update_network(network).await;
                 if let Err(e) = result {
@@ -389,6 +407,7 @@ impl NetworkCollector {
     async fn handle_pools_update(
         pools: Vec<Pool>,
         network_registries: &Arc<MultichainNetworkRegistry>,
+        error_loggers: &Arc<Mutex<Vec<Arc<dyn ErrorLogger>>>>,
     ) -> Result<()> {
         let mut network_to_pools = HashMap::new();
         for pool in pools {
@@ -403,13 +422,23 @@ impl NetworkCollector {
                 pools.len(),
                 network_id
             );
-            let network_registry = network_registries
-                .get_network_registry(network_id)
-                .await
-                .ok_or_else(|| {
+            let network_registry = match network_registries.get_network_registry(network_id).await {
+                Some(network_registry) => network_registry,
+                None => {
                     error!("Network registry not found for network {}", network_id);
-                    anyhow::anyhow!("Network registry not found for network {}", network_id)
-                })?;
+                    for logger in error_loggers.lock().await.iter() {
+                        let logger = Arc::clone(logger);
+                        let error_msg =
+                            format!("Network registry not found for network {}", network_id);
+                        tokio::spawn(async move {
+                            if let Err(e) = logger.log_error(&error_msg).await {
+                                error!("Error logging error: {:?}", e);
+                            }
+                        });
+                    }
+                    continue;
+                }
+            };
             network_registry
                 .read()
                 .await

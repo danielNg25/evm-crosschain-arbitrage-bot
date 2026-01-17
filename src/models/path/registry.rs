@@ -3,6 +3,7 @@ use anyhow::Result;
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -12,6 +13,25 @@ pub struct PoolDirection {
     pub pool: Address,
     pub token_in: Address,
     pub token_out: Address,
+}
+
+impl fmt::Display for PoolDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pool_str = format!("{:?}", self.pool);
+        let token_in_str = format!("{:?}", self.token_in);
+        let token_out_str = format!("{:?}", self.token_out);
+
+        write!(
+            f,
+            "Pool: {}...{} | Token In: {}...{} → Token Out: {}...{}",
+            &pool_str[0..6],
+            &pool_str[pool_str.len() - 4..],
+            &token_in_str[0..6],
+            &token_in_str[token_in_str.len() - 4..],
+            &token_out_str[0..6],
+            &token_out_str[token_out_str.len() - 4..]
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

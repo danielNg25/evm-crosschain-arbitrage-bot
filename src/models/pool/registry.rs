@@ -1,4 +1,4 @@
-use crate::models::pool::base::{PoolInterface, PoolType, Topic};
+use crate::models::pool::base::{PoolInterface, PoolType, Topic, TopicList};
 use crate::models::pool::v2::UniswapV2Pool;
 use crate::models::pool::v3::UniswapV3Pool;
 use crate::services::Database;
@@ -28,13 +28,21 @@ pub struct PoolRegistry {
 
 impl PoolRegistry {
     pub fn new(provider: DynProvider, network_id: u64) -> Self {
+        let topics = UniswapV2Pool::topics()
+            .into_iter()
+            .chain(UniswapV3Pool::topics())
+            .collect();
+        let profitable_topics = UniswapV2Pool::profitable_topics()
+            .into_iter()
+            .chain(UniswapV3Pool::profitable_topics())
+            .collect();
         Self {
             provider: Arc::new(provider),
             by_address: Arc::new(RwLock::new(HashMap::new())),
             by_type: Arc::new(RwLock::new(HashMap::new())),
             last_processed_block: Arc::new(RwLock::new(0)),
-            topics: Arc::new(RwLock::new(Vec::new())),
-            profitable_topics: Arc::new(RwLock::new(HashSet::new())),
+            topics: Arc::new(RwLock::new(topics)),
+            profitable_topics: Arc::new(RwLock::new(profitable_topics)),
             factory_to_fee: Arc::new(RwLock::new(HashMap::new())),
             aero_factory_addresses: Arc::new(RwLock::new(Vec::new())),
             network_id,

@@ -26,7 +26,7 @@ impl PathRepository {
     pub async fn insert_if_not_exists(&self, path: Path) -> Result<Option<bson::oid::ObjectId>> {
         let collection = self.client.collection::<Path>("paths");
 
-        // Check if a similar path already exists
+        // Check if a similar path already exists (including deleted ones for duplicate check)
         // We consider paths with same source/target networks and same chains as duplicates
         let filter = doc! {
             "paths": bson::to_bson(&path.paths)?
@@ -59,7 +59,13 @@ impl PathRepository {
     /// Find all paths
     pub async fn find_all(&self) -> Result<Vec<Path>> {
         let collection = self.client.collection::<Path>("paths");
-        let filter = doc! {};
+        let filter = doc! {
+            "$or": [
+                { "deleted_at": { "$exists": false } },
+                 { "deleted_at": null },
+                { "deleted_at": 0 }
+            ]
+        };
         let paths = collection
             .find(filter)
             .await?
@@ -72,7 +78,18 @@ impl PathRepository {
     pub async fn find_by_anchor_token(&self, anchor_token: &Address) -> Result<Vec<Path>> {
         let collection = self.client.collection::<Path>("paths");
         let anchor_token_str = address_to_string(anchor_token);
-        let filter = doc! { "paths": { "$elemMatch": { "anchor_token": &anchor_token_str } } };
+        let filter = doc! {
+            "$and": [
+                { "paths": { "$elemMatch": { "anchor_token": &anchor_token_str } } },
+                {
+                    "$or": [
+                        { "deleted_at": { "$exists": false } },
+                         { "deleted_at": null },
+                        { "deleted_at": 0 }
+                    ]
+                }
+            ]
+        };
         let paths = collection
             .find(filter)
             .await?
@@ -84,7 +101,18 @@ impl PathRepository {
 
     pub async fn find_by_chain_id(&self, chain_id: u64) -> Result<Vec<Path>> {
         let collection = self.client.collection::<Path>("paths");
-        let filter = doc! { "paths": { "$elemMatch": { "chain_id": chain_id as i64 } } };
+        let filter = doc! {
+            "$and": [
+                { "paths": { "$elemMatch": { "chain_id": chain_id as i64 } } },
+                {
+                    "$or": [
+                        { "deleted_at": { "$exists": false } },
+                         { "deleted_at": null },
+                        { "deleted_at": 0 }
+                    ]
+                }
+            ]
+        };
         let paths = collection
             .find(filter)
             .await?
@@ -103,12 +131,23 @@ impl PathRepository {
         let collection = self.client.collection::<Path>("paths");
         let anchor_token_str = address_to_string(anchor_token);
         let filter = doc! {
-            "paths": {
-                "$elemMatch": {
-                    "anchor_token": &anchor_token_str,
-                    "chain_id": chain_id as i64
+            "$and": [
+                {
+                    "paths": {
+                        "$elemMatch": {
+                            "anchor_token": &anchor_token_str,
+                            "chain_id": chain_id as i64
+                        }
+                    }
+                },
+                {
+                    "$or": [
+                        { "deleted_at": { "$exists": false } },
+                         { "deleted_at": null },
+                        { "deleted_at": 0 }
+                    ]
                 }
-            }
+            ]
         };
         let paths = collection
             .find(filter)
@@ -230,8 +269,19 @@ impl PathRepository {
     ) -> Result<u64> {
         let collection = self.client.collection::<Path>("paths");
         let filter = doc! {
-            "source_network_id": source_network_id as i64,
-            "target_network_id": target_network_id as i64
+            "$and": [
+                {
+                    "source_network_id": source_network_id as i64,
+                    "target_network_id": target_network_id as i64
+                },
+                {
+                    "$or": [
+                        { "deleted_at": { "$exists": false } },
+                         { "deleted_at": null },
+                        { "deleted_at": 0 }
+                    ]
+                }
+            ]
         };
         let count = collection.count_documents(filter).await?;
 
@@ -244,12 +294,23 @@ impl PathRepository {
         let collection = self.client.collection::<Path>("paths");
         // Find documents where updated_at > since_timestamp OR (updated_at doesn't exist AND created_at > since_timestamp)
         let filter = doc! {
-            "$or": [
-                { "updated_at": { "$gt": since_timestamp as i64 } },
+            "$and": [
                 {
-                    "$and": [
-                        { "updated_at": { "$exists": false } },
-                        { "created_at": { "$gt": since_timestamp as i64 } }
+                    "$or": [
+                        { "updated_at": { "$gt": since_timestamp as i64 } },
+                        {
+                            "$and": [
+                                { "updated_at": { "$exists": false } },
+                                { "created_at": { "$gt": since_timestamp as i64 } }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "$or": [
+                        { "deleted_at": { "$exists": false } },
+                         { "deleted_at": null },
+                        { "deleted_at": 0 }
                     ]
                 }
             ]

@@ -61,7 +61,12 @@ impl PoolRepository {
 
         let filter = doc! {
             "network_id": network_id as i64,
-            "address": &addr_str
+            "address": &addr_str,
+            "$or": [
+                { "deleted_at": { "$exists": false } },
+                 { "deleted_at": null },
+                { "deleted_at": 0 }
+            ]
         };
 
         let pool = collection.find_one(filter).await?;
@@ -71,7 +76,14 @@ impl PoolRepository {
     /// Find all pools for a given network
     pub async fn find_by_network_id(&self, network_id: u64) -> Result<Vec<Pool>> {
         let collection = self.client.collection::<Pool>("pools");
-        let filter = doc! { "network_id": network_id as i64 };
+        let filter = doc! {
+            "network_id": network_id as i64,
+            "$or": [
+                { "deleted_at": { "$exists": false } },
+                 { "deleted_at": null },
+                { "deleted_at": 0 }
+            ]
+        };
         let mut cursor = collection.find(filter).await?;
         let mut pools = Vec::new();
 
@@ -95,7 +107,7 @@ impl PoolRepository {
         // Collect target addresses as strings
         let target_addresses: Vec<String> = pools.iter().map(|p| p.address.clone()).collect();
 
-        // Find existing pools in one query
+        // Find existing pools in one query (including deleted ones for duplicate check)
         let filter = doc! {
             "network_id": network_id as i64,
             "address": { "$in": &target_addresses }
@@ -180,7 +192,14 @@ impl PoolRepository {
     /// Count pools for a given network
     pub async fn count_by_network_id(&self, network_id: u64) -> Result<u64> {
         let collection = self.client.collection::<Pool>("pools");
-        let filter = doc! { "network_id": network_id as i64 };
+        let filter = doc! {
+            "network_id": network_id as i64,
+            "$or": [
+                { "deleted_at": { "$exists": false } },
+                 { "deleted_at": null },
+                { "deleted_at": 0 }
+            ]
+        };
         let count = collection.count_documents(filter).await?;
 
         Ok(count)
@@ -203,7 +222,14 @@ impl PoolRepository {
     /// Find all pools (across all networks)
     pub async fn find_all(&self) -> Result<Vec<Pool>> {
         let collection = self.client.collection::<Pool>("pools");
-        let mut cursor = collection.find(doc! {}).await?;
+        let filter = doc! {
+            "$or": [
+                { "deleted_at": { "$exists": false } },
+                 { "deleted_at": null },
+                { "deleted_at": 0 }
+            ]
+        };
+        let mut cursor = collection.find(filter).await?;
         let mut pools = Vec::new();
 
         while let Some(pool) = cursor.try_next().await? {
@@ -219,12 +245,23 @@ impl PoolRepository {
         let collection = self.client.collection::<Pool>("pools");
         // Find documents where updated_at > since_timestamp OR (updated_at doesn't exist AND created_at > since_timestamp)
         let filter = doc! {
-            "$or": [
-                { "updated_at": { "$gt": since_timestamp as i64 } },
+            "$and": [
                 {
-                    "$and": [
-                        { "updated_at": { "$exists": false } },
-                        { "created_at": { "$gt": since_timestamp as i64 } }
+                    "$or": [
+                        { "updated_at": { "$gt": since_timestamp as i64 } },
+                        {
+                            "$and": [
+                                { "updated_at": { "$exists": false } },
+                                { "created_at": { "$gt": since_timestamp as i64 } }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "$or": [
+                        { "deleted_at": { "$exists": false } },
+                        { "deleted_at": null },
+                        { "deleted_at": 0 }
                     ]
                 }
             ]
