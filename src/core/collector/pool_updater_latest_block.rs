@@ -443,14 +443,18 @@ async fn proccess_pools(
                     backoff.as_millis(),
                     error_msg
                 );
-                for logger in error_loggers.iter() {
-                    let logger = Arc::clone(logger);
-                    let error_msg = error_msg.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = logger.log_error_with_chain_id(chain_id, &error_msg).await {
-                            error!("Error logging error: {:?}", e);
-                        }
-                    });
+                if !error_msg.contains("invalid block range params") {
+                    for logger in error_loggers.iter() {
+                        let logger = Arc::clone(logger);
+                        let error_msg = error_msg.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) =
+                                logger.log_error_with_chain_id(chain_id, &error_msg).await
+                            {
+                                error!("Error logging error: {:?}", e);
+                            }
+                        });
+                    }
                 }
                 if backoff == max_backoff {
                     error!(
