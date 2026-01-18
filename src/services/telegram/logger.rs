@@ -50,7 +50,7 @@ impl TelegramLogger {
     ) -> Self {
         // Send test message to the opp thread
         service
-            .send_markdown_message_to_general_channel("Init Telegram Logger")
+            .send_markdown_message_to_general_channel("🟢 Bot started")
             .await
             .unwrap();
         Self {
@@ -168,6 +168,10 @@ impl ErrorLogger for TelegramLogger {
     }
 
     async fn log_error_with_chain_id(&self, chain_id: u64, error: &str) -> Result<()> {
+        let skip_errors = vec!["invalid block range params", "after last accepted block"];
+        if skip_errors.contains(&error) {
+            return Ok(());
+        }
         if self.last_log_time.lock().await.elapsed()
             < Duration::from_secs(self.error_log_interval_secs)
         {
