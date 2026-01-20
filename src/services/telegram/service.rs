@@ -4,7 +4,7 @@ use teloxide::{
     adaptors::throttle::{Limits, Throttle},
     prelude::*,
     sugar::request::RequestLinkPreviewExt,
-    types::{MessageId, ParseMode, ThreadId},
+    types::{InlineKeyboardMarkup, MessageId, ParseMode, ThreadId},
     Bot,
 };
 
@@ -116,6 +116,38 @@ impl TelegramService {
             Some(true),
         )
         .await
+    }
+
+    /// Send a message with inline keyboard buttons
+    pub async fn send_message_with_keyboard(
+        &self,
+        message: &str,
+        keyboard: InlineKeyboardMarkup,
+        parse_mode: Option<ParseMode>,
+        thread_id: Option<u64>,
+    ) -> Result<()> {
+        let escaped_message = escape_markdownv2(message);
+        let parse_mode = parse_mode.unwrap_or(ParseMode::MarkdownV2);
+
+        let mut request = self
+            .bot
+            .send_message(self.chat_id.clone(), escaped_message)
+            .disable_link_preview(true)
+            .parse_mode(parse_mode)
+            .reply_markup(keyboard);
+
+        if let Some(thread_id) = thread_id {
+            request = request.message_thread_id(ThreadId(MessageId(thread_id as i32)));
+        }
+
+        request.send().await.map_err(|e| {
+            let error_msg = format!("Failed to send Telegram message with keyboard: {}", e);
+            error!("{}", error_msg);
+            anyhow::anyhow!(error_msg)
+        })?;
+
+        info!("Telegram message with keyboard sent successfully");
+        Ok(())
     }
 
     /// Get the bot instance (for advanced operations)

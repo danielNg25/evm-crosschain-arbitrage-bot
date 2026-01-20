@@ -17,6 +17,7 @@ use log::{error, LevelFilter};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use tokio::signal;
 use tokio::sync::{mpsc, RwLock};
 
 // Example pool addresses
@@ -80,13 +81,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let telegram_logger = Arc::new(
         TelegramLogger::new(
-            TelegramService::new(config.telegram.token, config.telegram.chat_id),
+            TelegramService::new(
+                config.telegram.token.clone(),
+                config.telegram.chat_id.clone(),
+            ),
             network_collector.network_registries.clone(),
             config.telegram.error_thread_id,
             config.telegram.error_log_interval_secs,
         )
         .await,
     );
+
+    // Start bot handler for processing mute button callbacks
+    TelegramLogger::start_bot_handler(telegram_logger.clone());
 
     network_collector
         .add_error_logger(telegram_logger.clone())
@@ -138,12 +145,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 15. Keep main thread alive with periodic database snapshot before exit
+    // 15. Keep main thread alive and handle Ctrl+C gracefully
     let running = Arc::new(AtomicBool::new(true));
+    let running_clone = running.clone();
+
+    // Handle Ctrl+C signal
+    tokio::spawn(async move {
+        match signal::ctrl_c().await {
+            Ok(()) => {
+                log::info!("Ctrl+C received, shutting down gracefully...");
+                running_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            Err(err) => {
+                log::error!("Unable to listen for shutdown signal: {}", err);
+            }
+        }
+    });
 
     while running.load(std::sync::atomic::Ordering::SeqCst) {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
+    log::info!("Shutting down...");
     Ok(())
 }
