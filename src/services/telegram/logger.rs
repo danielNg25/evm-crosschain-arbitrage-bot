@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     core::{
-        processor::processor::Opportunity, ErrorLogger, MultichainNetworkRegistry,
+        processor::processor::Opportunity, MultichainNetworkRegistry, NotificationLogger,
         OpportunityLogger,
     },
     services::TelegramService,
@@ -159,7 +159,7 @@ impl OpportunityLogger for TelegramLogger {
 }
 
 #[async_trait::async_trait]
-impl ErrorLogger for TelegramLogger {
+impl NotificationLogger for TelegramLogger {
     async fn log_error(&self, error: &str) -> Result<()> {
         info!("Logging error: {}", error);
         self.service
@@ -181,6 +181,12 @@ impl ErrorLogger for TelegramLogger {
         let message = format!("🔴 CHAIN ID *{}*: _{}_", chain_id, error);
         self.service
             .send_markdown_message_to_thread(&message, self.error_thread_id)
+            .await
+    }
+
+    async fn log_notification(&self, notification: &str) -> Result<()> {
+        self.service
+            .send_markdown_message_to_thread(notification, self.error_thread_id)
             .await
     }
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::core::{ErrorLogger, MultichainNetworkRegistry, NetworkRegistry, PoolChange};
+use crate::core::{MultichainNetworkRegistry, NetworkRegistry, NotificationLogger, PoolChange};
 use crate::models::profit_token::price_updater::PriceUpdater;
 use crate::models::profit_token::ProfitTokenRegistry;
 use crate::utils::metrics::Metrics;
@@ -31,7 +31,7 @@ pub struct NetworkCollector {
     pub network_registries: Arc<MultichainNetworkRegistry>,
     pub metrics: Arc<RwLock<Metrics>>,
     pub swap_event_tx: mpsc::Sender<PoolChange>,
-    pub error_loggers: Arc<Mutex<Vec<Arc<dyn ErrorLogger>>>>,
+    pub error_loggers: Arc<Mutex<Vec<Arc<dyn NotificationLogger>>>>,
 }
 
 impl NetworkCollector {
@@ -39,7 +39,7 @@ impl NetworkCollector {
         mongodb_service: Arc<MongoDbService>,
         metrics: Arc<RwLock<Metrics>>,
         swap_event_tx: mpsc::Sender<PoolChange>,
-        error_loggers: Vec<Arc<dyn ErrorLogger>>,
+        error_loggers: Vec<Arc<dyn NotificationLogger>>,
     ) -> Self {
         Self {
             mongodb_service,
@@ -57,7 +57,7 @@ impl NetworkCollector {
         Ok(())
     }
 
-    pub async fn add_error_logger(&self, error_logger: Arc<dyn ErrorLogger>) {
+    pub async fn add_error_logger(&self, error_logger: Arc<dyn NotificationLogger>) {
         info!("Adding error logger");
         self.error_loggers.lock().await.push(error_logger);
     }
@@ -162,8 +162,12 @@ impl NetworkCollector {
                     Ok(paths) => {
                         if !paths.is_empty() {
                             info!("Fetched {} new/updated paths from MongoDB", paths.len());
-                            if let Err(e) =
-                                Self::handle_paths_update(paths, &network_registries).await
+                            if let Err(e) = Self::handle_paths_update(
+                                paths,
+                                &network_registries,
+                                &error_loggers,
+                            )
+                            .await
                             {
                                 for logger in error_loggers.lock().await.iter() {
                                     let logger = Arc::clone(logger);
@@ -252,7 +256,7 @@ impl NetworkCollector {
         network_registries: &Arc<MultichainNetworkRegistry>,
         metrics: &Arc<RwLock<Metrics>>,
         swap_event_tx: &mpsc::Sender<PoolChange>,
-        error_loggers: &Arc<Mutex<Vec<Arc<dyn ErrorLogger>>>>,
+        error_loggers: &Arc<Mutex<Vec<Arc<dyn NotificationLogger>>>>,
     ) -> Result<()> {
         let network_len = networks.len();
         for network in networks {
@@ -361,6 +365,16 @@ impl NetworkCollector {
                         error!("Error starting pool updater: {}", e);
                     }
                 });
+                for logger in error_loggers.lock().await.iter() {
+                    let logger = Arc::clone(logger);
+                    let notification_msg =
+                        format!("Started pool updater for network {}", network_id);
+                    tokio::spawn(async move {
+                        if let Err(e) = logger.log_notification(&notification_msg).await {
+                            error!("Error logging notification: {:?}", e);
+                        }
+                    });
+                }
             } else {
                 // Checking changes in the network
                 let network_registry = match network_registries
@@ -396,6 +410,16 @@ impl NetworkCollector {
                         });
                     }
                     error!("Failed to update network: {}", e);
+                } else {
+                    for logger in error_loggers.lock().await.iter() {
+                        let logger = Arc::clone(logger);
+                        let notification_msg = format!("Updated network {}", network_id);
+                        tokio::spawn(async move {
+                            if let Err(e) = logger.log_notification(&notification_msg).await {
+                                error!("Error logging notification: {:?}", e);
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -407,7 +431,7 @@ impl NetworkCollector {
     async fn handle_pools_update(
         pools: Vec<Pool>,
         network_registries: &Arc<MultichainNetworkRegistry>,
-        error_loggers: &Arc<Mutex<Vec<Arc<dyn ErrorLogger>>>>,
+        error_loggers: &Arc<Mutex<Vec<Arc<dyn NotificationLogger>>>>,
     ) -> Result<()> {
         let mut network_to_pools = HashMap::new();
         for pool in pools {
@@ -439,6 +463,7 @@ impl NetworkCollector {
                     continue;
                 }
             };
+            let pools_len = pools.len();
             network_registry
                 .read()
                 .await
@@ -461,6 +486,18 @@ impl NetworkCollector {
                         .map_err(|e| anyhow::anyhow!("Failed to parse pool addresses: {}", e))?,
                 )
                 .await?;
+            for logger in error_loggers.lock().await.iter() {
+                let logger = Arc::clone(logger);
+                let notification_msg = format!(
+                    "Added {} pools to pending new pools for network {}",
+                    pools_len, network_id
+                );
+                tokio::spawn(async move {
+                    if let Err(e) = logger.log_notification(&notification_msg).await {
+                        error!("Error logging notification: {:?}", e);
+                    }
+                });
+            }
         }
 
         Ok(())
@@ -470,11 +507,32 @@ impl NetworkCollector {
     async fn handle_paths_update(
         paths: Vec<Path>,
         network_registries: &Arc<MultichainNetworkRegistry>,
+        error_loggers: &Arc<Mutex<Vec<Arc<dyn NotificationLogger>>>>,
     ) -> Result<()> {
+        let paths_len = paths.len();
         for path in paths {
             if let Err(e) = network_registries.set_paths(path.paths).await {
+                error!("Failed to set paths: {}", e);
+                for logger in error_loggers.lock().await.iter() {
+                    let logger = Arc::clone(logger);
+                    let error_msg = e.to_string();
+                    tokio::spawn(async move {
+                        if let Err(e) = logger.log_error(&error_msg).await {
+                            error!("Error logging error: {:?}", e);
+                        }
+                    });
+                }
                 return Err(e);
             }
+        }
+        for logger in error_loggers.lock().await.iter() {
+            let logger = Arc::clone(logger);
+            let notification_msg = format!("Added {} new paths", paths_len);
+            tokio::spawn(async move {
+                if let Err(e) = logger.log_notification(&notification_msg).await {
+                    error!("Error logging notification: {:?}", e);
+                }
+            });
         }
         Ok(())
     }

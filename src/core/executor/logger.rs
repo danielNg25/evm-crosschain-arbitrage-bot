@@ -13,7 +13,8 @@ pub trait OpportunityLogger: Send + Sync {
 }
 
 #[async_trait::async_trait]
-pub trait ErrorLogger: Send + Sync {
+pub trait NotificationLogger: Send + Sync {
+    async fn log_notification(&self, notification: &str) -> Result<()>;
     async fn log_error(&self, error: &str) -> Result<()>;
     async fn log_error_with_chain_id(&self, chain_id: u64, error: &str) -> Result<()>;
 }

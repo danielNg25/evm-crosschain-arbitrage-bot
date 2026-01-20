@@ -15,4 +15,4 @@ token = ""
 chat_id = ""
 error_thread_id = 10
 opp_thread_id = 1
-error_log_interval_secs = 60
+error_log_interval_secs = 10

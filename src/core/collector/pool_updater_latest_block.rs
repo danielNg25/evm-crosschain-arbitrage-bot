@@ -1,6 +1,6 @@
 use crate::blockchain::fetch_events;
 use crate::blockchain::pool_fetcher::identify_and_fetch_pool;
-use crate::core::ErrorLogger;
+use crate::core::NotificationLogger;
 use crate::models::pool::base::Topic;
 use crate::models::pool::PoolRegistry;
 use crate::models::token::TokenRegistry;
@@ -32,7 +32,7 @@ pub struct PoolUpdaterLatestBlock {
     pub multicall_address: Arc<RwLock<Address>>,
     pub wait_time_fetch: Arc<RwLock<u64>>,
     chain_id: u64,
-    error_loggers: Vec<Arc<dyn ErrorLogger>>,
+    error_loggers: Vec<Arc<dyn NotificationLogger>>,
 }
 
 impl PoolUpdaterLatestBlock {
@@ -47,7 +47,7 @@ impl PoolUpdaterLatestBlock {
         max_blocks_per_batch: u64,
         wait_time_fetch: u64,
         chain_id: u64,
-        error_loggers: Vec<Arc<dyn ErrorLogger>>,
+        error_loggers: Vec<Arc<dyn NotificationLogger>>,
     ) -> Self {
         // Initialize the last_processed_block in the registry if it's currently 0
         tokio::spawn({
@@ -354,7 +354,7 @@ async fn proccess_pools(
     profitable_topics: Arc<HashSet<Topic>>,
     chain_id: u64,
     wait_time_fetch: u64,
-    error_loggers: Vec<Arc<dyn ErrorLogger>>,
+    error_loggers: Vec<Arc<dyn NotificationLogger>>,
 ) -> Result<()> {
     let addresses: Vec<Address> = pool_registry.read().await.get_all_addresses().await.clone();
     let addresses_len = addresses.len();

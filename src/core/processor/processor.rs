@@ -67,7 +67,6 @@ pub struct Opportunity {
     pub amount_out: U256,
     pub anchor_token_amount: U256,
     pub steps: Vec<U256>,
-    pub min_profit_usd: f64,
 }
 
 /// Configuration for the simulator
@@ -338,7 +337,6 @@ impl CrossChainArbitrageProcessor {
                                         amount_out,
                                         anchor_token_amount,
                                         steps,
-                                        min_profit_usd,
                                     })
                                     .await
                                     .unwrap();
@@ -389,7 +387,6 @@ impl CrossChainArbitrageProcessor {
                                         amount_out,
                                         steps,
                                         anchor_token_amount,
-                                        min_profit_usd,
                                     })
                                     .await
                                     .unwrap();
@@ -490,7 +487,7 @@ impl CrossChainArbitrageProcessor {
             .await
             .unwrap();
 
-        Self::handle_path(
+        let res = Self::handle_path(
             path,
             &forward_pool_snapshot,
             &backward_pool_snapshot,
@@ -500,7 +497,27 @@ impl CrossChainArbitrageProcessor {
             &source_chain_profit_token_registry,
             &target_chain_profit_token_registry,
         )
-        .await
+        .await;
+
+        match res {
+            Ok(Some((profit, amount_in, anchor_token_amount, amount_out, steps))) => {
+                let min_profit_usd = self
+                    .get_min_profit_usd(path.source_chain_id, path.target_chain_id)
+                    .await;
+                if profit < min_profit_usd {
+                    return Ok(None);
+                }
+                return Ok(Some((
+                    profit,
+                    amount_in,
+                    anchor_token_amount,
+                    amount_out,
+                    steps,
+                )));
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!("Error from handle_path: {:?}", e)),
+        }
     }
 
     async fn handle_path(

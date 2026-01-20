@@ -58,9 +58,6 @@ impl Executor {
                 .await;
 
             if let Ok(Some((profit, amount_in, anchor_token_amount, amount_out, steps))) = result {
-                if profit < opportunity.min_profit_usd {
-                    break;
-                }
                 opportunity.profit = profit;
                 opportunity.amount_in = amount_in;
                 opportunity.amount_out = amount_out;
