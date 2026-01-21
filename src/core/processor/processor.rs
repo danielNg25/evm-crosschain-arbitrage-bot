@@ -64,7 +64,9 @@ pub struct Opportunity {
     pub block_number: u64,
     pub profit: f64,
     pub amount_in: U256,
+    pub amount_in_usd: f64,
     pub amount_out: U256,
+    pub amount_out_usd: f64,
     pub anchor_token_amount: U256,
     pub steps: Vec<U256>,
 }
@@ -322,6 +324,8 @@ impl CrossChainArbitrageProcessor {
                                 amount_in,
                                 anchor_token_amount,
                                 amount_out,
+                                amount_in_usd,
+                                amount_out_usd,
                                 steps,
                             )) = result
                             {
@@ -336,6 +340,8 @@ impl CrossChainArbitrageProcessor {
                                         amount_in,
                                         amount_out,
                                         anchor_token_amount,
+                                        amount_in_usd,
+                                        amount_out_usd,
                                         steps,
                                     })
                                     .await
@@ -372,6 +378,8 @@ impl CrossChainArbitrageProcessor {
                                 amount_in,
                                 anchor_token_amount,
                                 amount_out,
+                                amount_in_usd,
+                                amount_out_usd,
                                 steps,
                             )) = result
                             {
@@ -385,6 +393,8 @@ impl CrossChainArbitrageProcessor {
                                         profit,
                                         amount_in,
                                         amount_out,
+                                        amount_in_usd,
+                                        amount_out_usd,
                                         steps,
                                         anchor_token_amount,
                                     })
@@ -432,7 +442,7 @@ impl CrossChainArbitrageProcessor {
     pub async fn load_pool_and_handle_path(
         &self,
         path: &TwoSidePath,
-    ) -> Result<Option<(f64, U256, U256, U256, Vec<U256>)>> {
+    ) -> Result<Option<(f64, U256, U256, U256, f64, f64, Vec<U256>)>> {
         // (profit_usd, amount_in, anchor_token_amount, amount_out, steps)
         let mut forward_pool_snapshot: HashMap<Address, Box<dyn PoolInterface + Send + Sync>> =
             HashMap::new();
@@ -500,7 +510,15 @@ impl CrossChainArbitrageProcessor {
         .await;
 
         match res {
-            Ok(Some((profit, amount_in, anchor_token_amount, amount_out, steps))) => {
+            Ok(Some((
+                profit,
+                amount_in,
+                anchor_token_amount,
+                amount_out,
+                amount_in_usd,
+                amount_out_usd,
+                steps,
+            ))) => {
                 let min_profit_usd = self
                     .get_min_profit_usd(path.source_chain_id, path.target_chain_id)
                     .await;
@@ -512,6 +530,8 @@ impl CrossChainArbitrageProcessor {
                     amount_in,
                     anchor_token_amount,
                     amount_out,
+                    amount_in_usd,
+                    amount_out_usd,
                     steps,
                 )));
             }
@@ -520,6 +540,7 @@ impl CrossChainArbitrageProcessor {
         }
     }
 
+    // Result: profit, amount_in, anchor_token_amount, amount_out, amount_in_usd, amount_out_usd, steps
     async fn handle_path(
         path: &TwoSidePath,
         forward_pool_snapshot: &HashMap<Address, Box<dyn PoolInterface + Send + Sync>>,
@@ -529,7 +550,7 @@ impl CrossChainArbitrageProcessor {
         memo_cache: &Arc<DashMap<(u64, Address, Address, U256), U256>>,
         source_chain_profit_token_registry: &Arc<RwLock<ProfitTokenRegistry>>,
         target_chain_profit_token_registry: &Arc<RwLock<ProfitTokenRegistry>>,
-    ) -> Result<Option<(f64, U256, U256, U256, Vec<U256>)>> {
+    ) -> Result<Option<(f64, U256, U256, U256, f64, f64, Vec<U256>)>> {
         // If max_amount is too small, return early
         if max_amount <= U256::ONE {
             return Ok(None);
@@ -538,6 +559,8 @@ impl CrossChainArbitrageProcessor {
         let mut best_profit = 0.0;
         let mut best_amount_in = U256::ZERO;
         let mut best_amount_out = U256::ZERO;
+        let mut best_amount_in_usd = 0.0;
+        let mut best_amount_out_usd = 0.0;
         let mut best_anchor_token_amount = U256::ZERO;
         let mut best_steps = Vec::new();
 
@@ -613,17 +636,24 @@ impl CrossChainArbitrageProcessor {
             }
 
             // Run simulation
-            let (profit, amount_in, anchor_token_amount, amount_out, steps) =
-                Self::simulate_amount(
-                    &path,
-                    amount,
-                    &forward_pool_snapshot,
-                    &backward_pool_snapshot,
-                    &memo_cache,
-                    &source_chain_profit_token_registry,
-                    &target_chain_profit_token_registry,
-                )
-                .await?;
+            let (
+                profit,
+                amount_in,
+                anchor_token_amount,
+                amount_out,
+                amount_in_usd,
+                amount_out_usd,
+                steps,
+            ) = Self::simulate_amount(
+                &path,
+                amount,
+                &forward_pool_snapshot,
+                &backward_pool_snapshot,
+                &memo_cache,
+                &source_chain_profit_token_registry,
+                &target_chain_profit_token_registry,
+            )
+            .await?;
 
             // Track result
             sample_results.push((amount, profit, anchor_token_amount));
@@ -635,6 +665,8 @@ impl CrossChainArbitrageProcessor {
                 best_amount_out = amount_out;
                 best_steps = steps;
                 best_anchor_token_amount = anchor_token_amount;
+                best_amount_in_usd = amount_in_usd;
+                best_amount_out_usd = amount_out_usd;
             }
         }
 
@@ -681,22 +713,31 @@ impl CrossChainArbitrageProcessor {
 
                     // Avoid underflow when low == high
                     if search_low == search_high {
-                        let (profit, amount_in, anchor_token_amount, amount_out, steps) =
-                            Self::simulate_amount(
-                                &path,
-                                search_low,
-                                &forward_pool_snapshot,
-                                &backward_pool_snapshot,
-                                &memo_cache,
-                                &source_chain_profit_token_registry,
-                                &target_chain_profit_token_registry,
-                            )
-                            .await?;
+                        let (
+                            profit,
+                            amount_in,
+                            anchor_token_amount,
+                            amount_out,
+                            amount_in_usd,
+                            amount_out_usd,
+                            steps,
+                        ) = Self::simulate_amount(
+                            &path,
+                            search_low,
+                            &forward_pool_snapshot,
+                            &backward_pool_snapshot,
+                            &memo_cache,
+                            &source_chain_profit_token_registry,
+                            &target_chain_profit_token_registry,
+                        )
+                        .await?;
 
                         if profit > best_profit {
                             best_profit = profit;
                             best_amount_in = amount_in;
                             best_amount_out = amount_out;
+                            best_amount_in_usd = amount_in_usd;
+                            best_amount_out_usd = amount_out_usd;
                             best_steps = steps;
                             best_anchor_token_amount = anchor_token_amount;
                         }
@@ -710,45 +751,63 @@ impl CrossChainArbitrageProcessor {
 
                     // Get or create cache entry for mid1
                     // Evaluate mid1
-                    let (profit1, amount_in1, anchor_token_amount1, amount_out1, steps1) =
-                        Self::simulate_amount(
-                            &path,
-                            mid1,
-                            &forward_pool_snapshot,
-                            &backward_pool_snapshot,
-                            &memo_cache,
-                            &source_chain_profit_token_registry,
-                            &target_chain_profit_token_registry,
-                        )
-                        .await?;
+                    let (
+                        profit1,
+                        amount_in1,
+                        anchor_token_amount1,
+                        amount_out1,
+                        amount_in_usd1,
+                        amount_out_usd1,
+                        steps1,
+                    ) = Self::simulate_amount(
+                        &path,
+                        mid1,
+                        &forward_pool_snapshot,
+                        &backward_pool_snapshot,
+                        &memo_cache,
+                        &source_chain_profit_token_registry,
+                        &target_chain_profit_token_registry,
+                    )
+                    .await?;
 
                     // Update best if applicable
                     if profit1 > best_profit {
                         best_profit = profit1;
                         best_amount_in = amount_in1;
                         best_amount_out = amount_out1;
+                        best_amount_in_usd = amount_in_usd1;
+                        best_amount_out_usd = amount_out_usd1;
                         best_steps = steps1;
                         best_anchor_token_amount = anchor_token_amount1;
                     }
 
                     // Normal/Slow: Evaluate mid2 for ternary search
-                    let (profit2, amount_in2, anchor_token_amount2, amount_out2, steps2) =
-                        Self::simulate_amount(
-                            &path,
-                            mid2,
-                            &forward_pool_snapshot,
-                            &backward_pool_snapshot,
-                            &memo_cache,
-                            &source_chain_profit_token_registry,
-                            &target_chain_profit_token_registry,
-                        )
-                        .await?;
+                    let (
+                        profit2,
+                        amount_in2,
+                        anchor_token_amount2,
+                        amount_out2,
+                        amount_in_usd2,
+                        amount_out_usd2,
+                        steps2,
+                    ) = Self::simulate_amount(
+                        &path,
+                        mid2,
+                        &forward_pool_snapshot,
+                        &backward_pool_snapshot,
+                        &memo_cache,
+                        &source_chain_profit_token_registry,
+                        &target_chain_profit_token_registry,
+                    )
+                    .await?;
 
                     // Update best if applicable
                     if profit2 > best_profit {
                         best_profit = profit2;
                         best_amount_in = amount_in2;
                         best_amount_out = amount_out2;
+                        best_amount_in_usd = amount_in_usd2;
+                        best_amount_out_usd = amount_out_usd2;
                         best_steps = steps2;
                         best_anchor_token_amount = anchor_token_amount2;
                     }
@@ -773,6 +832,8 @@ impl CrossChainArbitrageProcessor {
                 best_amount_in,
                 best_anchor_token_amount,
                 best_amount_out,
+                best_amount_in_usd,
+                best_amount_out_usd,
                 best_steps,
             )));
         }
@@ -780,6 +841,7 @@ impl CrossChainArbitrageProcessor {
         Ok(None)
     }
 
+    // Result: profit, amount_in, anchor_token_amount, amount_out, amount_in_usd, amount_out_usd, steps
     async fn simulate_amount(
         path: &TwoSidePath,
         amount_in: U256,
@@ -788,7 +850,7 @@ impl CrossChainArbitrageProcessor {
         memo_cache: &Arc<DashMap<(u64, Address, Address, U256), U256>>,
         source_chain_profit_token_registry: &Arc<RwLock<ProfitTokenRegistry>>,
         target_chain_profit_token_registry: &Arc<RwLock<ProfitTokenRegistry>>,
-    ) -> Result<(f64, U256, U256, U256, Vec<U256>)> {
+    ) -> Result<(f64, U256, U256, U256, f64, f64, Vec<U256>)> {
         let mut current_amount = amount_in;
         let anchor_token_amount: U256;
         let path_length = forward_pool_snapshot.keys().len() + backward_pool_snapshot.keys().len();
@@ -892,6 +954,8 @@ impl CrossChainArbitrageProcessor {
             amount_in,
             anchor_token_amount,
             amount_out,
+            amount_in_usd,
+            amount_out_usd,
             steps,
         ))
     }

@@ -199,14 +199,14 @@ impl ProfitTokenRegistry {
     }
 
     pub fn start(&self) -> Result<()> {
-        info!("Starting price updater with 1-hour interval");
+        info!("Starting price updater with 5-minute interval");
         let price_updater = self.price_updater.clone();
         let tokens = self.tokens.clone();
         let token_registry = self.token_registry.clone();
         let min_profit_usd = self.min_profit_usd;
 
         tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(3600)); // 1 hour
+            let mut interval = interval(Duration::from_secs(300)); // 5 minutes
             loop {
                 match price_updater.read().await.update_prices().await {
                     Ok(prices) => {

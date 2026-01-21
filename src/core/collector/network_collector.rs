@@ -365,6 +365,13 @@ impl NetworkCollector {
                         error!("Error starting pool updater: {}", e);
                     }
                 });
+
+                tokio::spawn(async move {
+                    info!("Starting profit token registry for network {}", network_id);
+                    if let Err(e) = profit_token_registry.read().await.start() {
+                        error!("Error starting profit token registry: {}", e);
+                    }
+                });
                 for logger in error_loggers.lock().await.iter() {
                     let logger = Arc::clone(logger);
                     let notification_msg =

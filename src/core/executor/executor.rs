@@ -57,11 +57,22 @@ impl Executor {
                 .load_pool_and_handle_path(&opportunity.path)
                 .await;
 
-            if let Ok(Some((profit, amount_in, anchor_token_amount, amount_out, steps))) = result {
+            if let Ok(Some((
+                profit,
+                amount_in,
+                anchor_token_amount,
+                amount_out,
+                amount_in_usd,
+                amount_out_usd,
+                steps,
+            ))) = result
+            {
                 opportunity.profit = profit;
                 opportunity.amount_in = amount_in;
                 opportunity.amount_out = amount_out;
                 opportunity.anchor_token_amount = anchor_token_amount;
+                opportunity.amount_in_usd = amount_in_usd;
+                opportunity.amount_out_usd = amount_out_usd;
                 opportunity.steps = steps;
 
                 self.log_opportunity_again(&opportunity_id, &opportunity)

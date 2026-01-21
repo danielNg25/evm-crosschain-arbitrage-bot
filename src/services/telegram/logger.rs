@@ -40,6 +40,27 @@ fn format_decimal_4(value: &str) -> String {
     }
 }
 
+/// Format a decimal string to 2 decimal places (like toFixed(2) in TypeScript)
+/// Operates on strings to avoid precision loss with large token amounts
+fn format_decimal_2(value: &str) -> String {
+    // Find the decimal point position
+    if let Some(dot_pos) = value.find('.') {
+        let integer_part = &value[..dot_pos];
+        let decimal_part = &value[dot_pos + 1..];
+
+        if decimal_part.len() >= 2 {
+            // Truncate to 2 decimal places
+            format!("{}.{}", integer_part, &decimal_part[..2])
+        } else {
+            // Pad with zeros to 2 decimal places
+            format!("{}.{:0<2}", integer_part, decimal_part)
+        }
+    } else {
+        // No decimal point, add ".00"
+        format!("{}", value)
+    }
+}
+
 pub struct TelegramLogger {
     service: TelegramService,
     multichain_network_registry: Arc<MultichainNetworkRegistry>,
@@ -240,17 +261,19 @@ impl OpportunityLogger for TelegramLogger {
             .unwrap();
 
         let message = format!(
-            "💰 *{}*: _{}_ -> _{}_\nProfit: _{}_$\n_{}_ in: *{}*\n_{}_: *{}*\n_{}_ out: *{}*",
+            "💰 *{}*: _{}_ -> _{}_\nProfit: _{}_$\n_{}_ in: *{}* _(~${})_ \n_{}_: *{}*\n_{}_ out: *{}* _(~${})_",
             anchor_token_symbol,
             source_chain_name.to_uppercase(),
             target_chain_name.to_uppercase(),
-            opportunity.profit,
+            format_decimal_2(&opportunity.profit.to_string()),
             source_token_symbol,
             format_decimal_4(&amount_in),
+            format_decimal_2(&opportunity.amount_in_usd.to_string()),
             anchor_token_symbol,
             format_decimal_4(&anchor_token_amount),
             target_token_symbol,
-            format_decimal_4(&amount_out)
+            format_decimal_4(&amount_out),
+            format_decimal_2(&opportunity.amount_out_usd.to_string()),
         );
 
         // Create inline keyboard with mute buttons
